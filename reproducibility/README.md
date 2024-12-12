@@ -14,3 +14,7 @@ As described in the paper
 Train, test, and —optionally— val sets are reported in the form of `.csv` files and are easily usable with the provided code.
 Files endings with {number}.csv indicate a specific folder to use in the cross-validation.
 Details on how to fine-tune on specific dataset is provided in the paper.
+
+## Notes on missing datasets
+Folders for SPH and PTB-Xl are omitted as these datasets are provided with predefined splits.
+The folder for the Ribeiro dataset is not provided to respect non-disclosure terms of the data-user agreement. Nonetheless, the test set is predefined and publicly available. For this specific case, we can provide (upon request) fine-tuned models ready to be used for inference and evaluation.
