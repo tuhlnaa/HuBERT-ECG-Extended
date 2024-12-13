@@ -1,12 +1,12 @@
 # REPRODUCIBILITY
 
-Since for most dataset there isn't a pre-definied train-val-test split nor a fixed and known test set, we provide we splits we used to train, validate and test HuBERT-ECG to facilitate the replication of our results.
+Since for most dataset there isn't a pre-defined train-val-test split nor a fixed and known test set, we provide the splits we used to train, validate and test HuBERT-ECG to facilitate the replication of our results.
 These splits are provided as csv files and are fully compatible with the underlying code.
 
 ## Notes on dataset labels
 As described in the paper
 - instances labelled with conditions appearing only once are dropped because these conditions are either unlearnable or untestable.
-- instances labelled with conditions appearing only twice are place in the train and test sets only to allow the model to try to learn and be evaluated on these conditions (within the limit of this setup).
+- instances labelled with conditions appearing only twice are placed only in the train and test sets to allow the model to try to learn and be evaluated on these conditions (within the limit of this setup).
 - instances labelled with conditions appearing only three times are placed one in each split
 - instances labelled with other conditions are placed in the train-val-test split following a randomly stratified selection using the functions in `utils.py`.
 
