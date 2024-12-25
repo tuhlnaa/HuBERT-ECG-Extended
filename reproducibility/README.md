@@ -18,6 +18,9 @@ Details on how to fine-tune on specific dataset is provided in the paper.
 ## Notes on missing datasets
 The folder for the Ribeiro dataset is not provided to respect non-disclosure terms of the data-user agreement. Nonetheless, the test set is predefined and publicly available. For this specific case, we can provide (upon request) fine-tuned models ready to be used for inference and evaluation.
 
+## Cardio-Learning
+Since Ribeiro dataset, a significant part of Cardio-Learning, cannot be disclosed, the results on the dataset are hardly to reproduce. However, to help use `hubert_ecg_{size}_cardio_learning`, we provide the ordered columns of the corresponding dataframe used to reference the Cardio-Learning examples.
+
 ## WHAT YOU HAVE TO DO
 You simply have to download an ECG dataset and store its instances as .npy files with a name that matches the name provided in the .csv files in this folder.
 Since labels are already provided, you don't have to 'find' them again within original .hea files.
