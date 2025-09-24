@@ -1,5 +1,6 @@
+import logging
 import numpy as np
-from loguru import logger
+# from loguru import logger
 import pandas as pd
 from typing import Tuple, Any
 import torch
@@ -11,6 +12,16 @@ from scipy import signal
 
 SAMPLES_IN_5_SECONDS_AT_500HZ = 2500
 SAMPLES_IN_10_SECONDS_AT_500HZ = 5000
+
+from rich.logging import RichHandler
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(message)s", 
+    handlers=[RichHandler()]
+)
+logger = logging.getLogger(__name__)
 
 class ECGDataset(Dataset):
     def __init__(

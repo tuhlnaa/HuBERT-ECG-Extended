@@ -1,19 +1,21 @@
 """
-ECG Dataset Processing Module - Recursive File Processing
+ECG Dataset Processing Module - Recursive File Processing with Multiprocessing
 
 This module provides functionality for processing ECG datasets by recursively
 searching for .hea files in a directory structure and flattening the output
-to a single output folder.
+to a single output folder. Now supports multiprocessing for faster processing.
 """
 
 import logging
 import sys
 import wfdb
 import numpy as np
+import multiprocessing as mp
 from pathlib import Path
-from typing import Union, List, Generator
-from tqdm import tqdm
+from typing import Union, Generator, Tuple, List
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from rich.logging import RichHandler
+from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, BarColumn, TextColumn
 
 # Import custom modules
 PROJECT_ROOT = Path(__file__).parents[1]
@@ -30,9 +32,51 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def process_single_ecg_file(args: Tuple[Path, Path]) -> Tuple[bool, str, str]:
+    """
+    Worker function for processing a single ECG file.
+    This function is designed to be used with multiprocessing.
+    
+    Args:
+        args: Tuple containing (hea_file_path, output_file_path)
+        
+    Returns:
+        Tuple of (success, relative_path, error_message)
+    """
+    hea_file_path, output_file_path = args
+    
+    try:
+        # Read WFDB signal (use the path without .hea extension)
+        signal_path = str(hea_file_path.with_suffix(''))
+        signal, metadata = wfdb.rdsamp(signal_path)
+
+        # Transpose signal for channel-first format (common in PyTorch)
+        signal = signal.T
+        
+        # Handle NaN values
+        if np.isnan(signal).any():
+            logger.warning(f"NaN values found in {hea_file_path.name}, replacing with zeros")
+            signal = np.nan_to_num(signal, nan=0.0)
+        
+        # Apply preprocessing
+        sampling_rate = metadata['fs']
+        processed_signal = ecg_preprocessing(signal, sampling_rate)
+        processed_signal = processed_signal.astype(np.float32)
+
+        # Save processed signal, e.g. shape=(38400, 12), float64
+        np.save(output_file_path, processed_signal)
+        
+        return True, str(hea_file_path.name), ""
+        
+    except Exception as e:
+        error_msg = f"Failed to process {hea_file_path.name}: {str(e)}"
+        return False, str(hea_file_path.name), error_msg
+
+
 class ECGRecursiveProcessor:
     """
     A class for recursively processing ECG datasets with flattened output structure.
+    Now supports multiprocessing for improved performance.
     
     This processor searches for WFDB format ECG files (.hea) recursively in a directory
     structure and processes them to a flattened output directory without preserving
@@ -43,7 +87,8 @@ class ECGRecursiveProcessor:
         self, 
         root_path: Union[str, Path], 
         output_path: Union[str, Path],
-        skip_existing: bool = True
+        skip_existing: bool = True,
+        n_processes: int = None,
     ) -> None:
         """
         Initialize the recursive ECG dataset processor.
@@ -52,10 +97,15 @@ class ECGRecursiveProcessor:
             root_path: Root directory to search for .hea files recursively
             output_path: Path for processed output files (flattened structure)
             skip_existing: Whether to skip already processed files
+            n_processes: Number of processes to use
+            detailed_logging: Whether to show detailed logging during processing
         """
         self.root_path = Path(root_path)
         self.output_path = Path(output_path)
         self.skip_existing = skip_existing
+        self.n_processes = max(1, min(n_processes, mp.cpu_count()))
+        
+        logger.info(f"Using {self.n_processes} processes for ECG file processing")
         
         # Validate paths
         if not self.root_path.exists():
@@ -63,39 +113,17 @@ class ECGRecursiveProcessor:
         
         if not self.root_path.is_dir():
             raise NotADirectoryError(f"Root path is not a directory: {self.root_path}")
-        
-        # Create output directory
+
         self.output_path.mkdir(parents=True, exist_ok=True)
-        
-        logger.info(f"Initialized recursive ECG processor: {self.root_path} -> {self.output_path}")
-    
+
     
     def find_hea_files(self) -> Generator[Path, None, None]:
         """Recursively find all .hea files in the root directory."""
-        logger.info(f"Searching for .hea files recursively in: {self.root_path}")
-        
         # Use rglob to recursively find all .hea files
         hea_files = list(self.root_path.rglob("*.hea"))
         
-        logger.info(f"Found {len(hea_files)} .hea files")
-        
         for hea_file in hea_files:
             yield hea_file
-    
-    
-    def _generate_output_filename(self, hea_file_path: Path) -> str:
-        """
-        Generate standardized output filename based on the input .hea file.
-        
-        Args:
-            hea_file_path: Path to the input .hea file
-            
-        Returns:
-            Output filename following the pattern: original_name.hea.npy
-        """
-        # Get the filename without extension and add .hea.npy
-        base_name = hea_file_path.stem  # Gets filename without .hea extension
-        return f"{base_name}.hea.npy"
     
     
     def _handle_filename_conflicts(self, output_filename: str, hea_file_path: Path) -> str:
@@ -127,88 +155,109 @@ class ECGRecursiveProcessor:
         return final_filename
     
     
-    def _process_single_file(self, hea_file_path: Path, output_file_path) -> bool:
-        """Process a single ECG file."""
-        try:
-            # # Generate output filename and handle conflicts
-            # output_filename = self._generate_output_filename(hea_file_path)
-            # output_filename = self._handle_filename_conflicts(output_filename, hea_file_path)
-            # output_filepath = self.output_path / output_filename
+    def _prepare_processing_tasks(self) -> List[Tuple[Path, Path]]:
+        """
+        Prepare all processing tasks by finding files and handling conflicts.
+        
+        Returns:
+            List of tuples (hea_file_path, output_file_path)
+        """
+        hea_files = list(self.find_hea_files())
+        tasks = []
+        
+        for hea_file_path in hea_files:
+            # Handle filename conflicts
+            output_filename = f"{hea_file_path.stem}.hea.npy"
+            output_filename = self._handle_filename_conflicts(output_filename, hea_file_path)
+            output_filepath = self.output_path / output_filename
             
-            # # Skip if file already exists and skip_existing is True
-            # if self.skip_existing and output_filepath.exists():
-            #     logger.debug(f"Skipping existing file: {output_filename}")
-            #     return True
-            
-            # Read WFDB signal (use the path without .hea extension)
-            signal_path = str(hea_file_path.with_suffix(''))
-            signal, metadata = wfdb.rdsamp(signal_path)
-            
-            # Transpose signal for channel-first format (common in PyTorch)
-            signal = signal.T
-            
-            # Handle NaN values
-            if np.isnan(signal).any():
-                logger.warning(f"NaN values found in {hea_file_path.name}, replacing with zeros")
-                signal = np.nan_to_num(signal, nan=0.0)
-            
-            # Apply preprocessing
-            sampling_rate = metadata['fs']
-            processed_signal = ecg_preprocessing(signal, sampling_rate)
-            
-            # Save processed signal
-            #np.save(output_filepath, processed_signal)
-            np.save(output_file_path, processed_signal)
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to process {hea_file_path.relative_to(self.root_path)}: {e}")
-            return False
+            # Skip if file already exists and skip_existing is True
+            if self.skip_existing and output_filepath.exists():
+                continue
+                
+            tasks.append((hea_file_path, output_filepath))
+        
+        return tasks
     
     
     def process_all_files(self) -> dict:
         """
-        Process all .hea files found recursively in the root directory.
+        Process all .hea files found recursively in the root directory using multiprocessing.
         
         Returns:
             Dictionary with processing statistics
         """
-        # Find all .hea files
-        hea_files = list(self.find_hea_files())
+        # Find all .hea files and prepare tasks
+        logger.info("Preparing processing tasks...")
+        tasks = self._prepare_processing_tasks()
+        total_files_found = len(list(self.find_hea_files()))
         
-        if not hea_files:
+        if total_files_found == 0:
             logger.warning("No .hea files found in the directory structure")
             return {"processed": 0, "failed": 0, "skipped": 0, "total_found": 0}
         
-        logger.info(f"Starting processing of {len(hea_files)} ECG files")
+        skipped_count = total_files_found - len(tasks)
+        
+        if len(tasks) == 0:
+            logger.info(f"All {total_files_found} files already exist and were skipped")
+            return {
+                "processed": 0, 
+                "failed": 0, 
+                "skipped": skipped_count, 
+                "total_found": total_files_found
+            }
+        
+        logger.info(f"Starting multiprocessing of {len(tasks)} ECG files using {self.n_processes} processes")
+        if skipped_count > 0:
+            logger.info(f"Skipping {skipped_count} files that already exist")
         
         processed_count = 0
         failed_count = 0
-        skipped_count = 0
+        failed_files = []
         
-        for hea_file_path in tqdm(hea_files, desc="Processing ECG files"):
-            # Check if output already exists for skipping count
-            output_filename = self._generate_output_filename(hea_file_path)
-            output_filepath = self._handle_filename_conflicts(output_filename, hea_file_path)
-            output_filepath = self.output_path / output_filename
-            
-            # if self.skip_existing and output_filepath.exists():
-            if output_filepath.exists():
-                skipped_count += 1
-                continue
+        # Use ProcessPoolExecutor for multiprocessing with rich progress bar
+        with ProcessPoolExecutor(max_workers=self.n_processes) as executor:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TextColumn("({task.completed}/{task.total})"),
+                TimeElapsedColumn(),
+            ) as progress:
+                
+                # Add progress task
+                task_id = progress.add_task(f"[green]Processing ECG files", total=len(tasks))
+                
+                # Submit all tasks
+                futures = [executor.submit(process_single_ecg_file, task) for task in tasks]
+                
+                # Process results as they complete
+                for future in as_completed(futures):
+                    success, filename, error_msg = future.result()
+                    
+                    if success:
+                        processed_count += 1
+                    else:
+                        failed_count += 1
+                        failed_files.append((filename, error_msg))
+                        logger.error(error_msg)
+                    
+                    progress.update(task_id, advance=1)
         
-            success = self._process_single_file(hea_file_path, output_filepath)
-            if success:
-                processed_count += 1
-            else:
-                failed_count += 1
+        # Log failed files summary
+        if failed_files:
+            logger.error(f"{failed_count} files failed processing:")
+            for filename, error_msg in failed_files[:3]:  # Show first 3 errors
+                logger.error(f"  {filename}: {error_msg}")
+            if len(failed_files) > 3:
+                logger.error(f"  ... and {len(failed_files) - 3} more failures")
         
         stats = {
             "processed": processed_count,
             "failed": failed_count,
             "skipped": skipped_count,
-            "total_found": len(hea_files)
+            "total_found": total_files_found
         }
         
         logger.info(f"Processing complete: {stats}")
@@ -233,17 +282,19 @@ class ECGRecursiveProcessor:
 
 
 def main() -> None:
-    """Main execution function for recursive ECG dataset processing."""
+    """Main execution function for recursive ECG dataset processing with multiprocessing."""
     # Configuration
     ROOT_PATH = Path(r"D:\Kai\ECG-dataset\G12EC\ptb")  # Change this to your root directory
     OUTPUT_PATH = Path("./output")  # Change this to your desired output directory
+    N_PROCESSES = 10
     
     try:
-        # Initialize recursive processor
+        # Initialize recursive processor with multiprocessing support
         processor = ECGRecursiveProcessor(
             root_path=ROOT_PATH,
             output_path=OUTPUT_PATH,
-            skip_existing=True
+            skip_existing=True,
+            n_processes=N_PROCESSES,
         )
         
         # Get file summary
@@ -262,16 +313,11 @@ def main() -> None:
         
         # Show files per directory (limit output for readability)
         logger.info("\nFiles per directory:")
-        for directory, count in list(summary['files_per_directory'].items())[:3]:  # Show first 10
+        for directory, count in list(summary['files_per_directory'].items())[:3]:  # Show first 3
             logger.info(f"  {directory}: {count} files")
         
         if len(summary['files_per_directory']) > 3:
             logger.info(f"  ... and {len(summary['files_per_directory']) - 3} more directories")
-        
-        # Process all files
-        logger.info("\n" + "=" * 50)
-        logger.info("STARTING PROCESSING")
-        logger.info("=" * 50)
         
         stats = processor.process_all_files()
 
