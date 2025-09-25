@@ -4,13 +4,19 @@ ECG Dataset Processing Module - Recursive File Processing with Multiprocessing
 This module provides functionality for processing ECG datasets by recursively
 searching for .hea files in a directory structure and flattening the output
 to a single output folder. Now supports multiprocessing for faster processing.
+
+Uusage:
+python ./script/preprocess_ecg_dataset.py --root-path "/path/to/ecg/data" --output-path "/path/to/output" --n-processes 10
 """
 
+import argparse
 import logging
 import sys
 import wfdb
+
 import numpy as np
 import multiprocessing as mp
+
 from pathlib import Path
 from typing import Union, Generator, Tuple, List
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -281,55 +287,66 @@ class ECGRecursiveProcessor:
         }
 
 
+def parse_arguments() -> argparse.Namespace:
+    """Parse command line arguments for ECG dataset processing."""
+    parser = argparse.ArgumentParser(
+        description="Recursive ECG dataset processing with multiprocessing support",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    
+    parser.add_argument("--root-path", type=Path, help="Root directory path containing ECG dataset files")
+    parser.add_argument("--output-path", type=Path, default=Path("./output"), help="Output directory path for processed files")
+    parser.add_argument("--n-processes", type=int, default=8, help="Number of processes for multiprocessing")
+    
+    return parser.parse_args()
+
+
 def main() -> None:
     """Main execution function for recursive ECG dataset processing with multiprocessing."""
-    # Configuration
-    ROOT_PATH = Path(r"D:\Kai\ECG-dataset\G12EC\ptb")  # Change this to your root directory
-    OUTPUT_PATH = Path("./output")  # Change this to your desired output directory
-    N_PROCESSES = 10
+    # Parse command line arguments
+    args = parse_arguments()
     
     try:
         # Initialize recursive processor with multiprocessing support
         processor = ECGRecursiveProcessor(
-            root_path=ROOT_PATH,
-            output_path=OUTPUT_PATH,
+            root_path=args.root_path,
+            output_path=args.output_path,
             skip_existing=True,
-            n_processes=N_PROCESSES,
+            n_processes=args.n_processes,
         )
-        
+       
         # Get file summary
         logger.info("Analyzing directory structure...")
         summary = processor.get_file_summary()
-        
+       
         logger.info("=" * 50)
         logger.info("FILE DISCOVERY SUMMARY")
         logger.info("=" * 50)
         logger.info(f"Total .hea files found: {summary['total_files']}")
         logger.info(f"Directories containing files: {summary['directories']}")
-        
+       
         if summary['total_files'] == 0:
             logger.warning("No .hea files found. Exiting.")
             return
-        
+       
         # Show files per directory (limit output for readability)
         logger.info("\nFiles per directory:")
         for directory, count in list(summary['files_per_directory'].items())[:3]:  # Show first 3
             logger.info(f"  {directory}: {count} files")
-        
+       
         if len(summary['files_per_directory']) > 3:
             logger.info(f"  ... and {len(summary['files_per_directory']) - 3} more directories")
-        
+       
         stats = processor.process_all_files()
 
         if stats['failed'] > 0:
             logger.warning(f"{stats['failed']} files failed processing")
-        
-        logger.info(f"\nAll processed files saved to: {OUTPUT_PATH}")
-        
+       
+        logger.info(f"\nAll processed files saved to: {args.output_path}")
+       
     except Exception as e:
         logger.error(f"Main execution failed: {e}")
         sys.exit(1)
-
 
 if __name__ == "__main__":
     main()

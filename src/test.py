@@ -1,12 +1,19 @@
-import pandas as pd
-from torch.utils.data import DataLoader
+import os
+import sys
 import torch
+import argparse
+
 import torch.nn as nn
+import pandas as pd
+import numpy as np
+
+from typing import Iterable
+from transformers import HubertConfig
+from pathlib import Path
+from torch.utils.data import DataLoader
 from dataset import ECGDataset
 from tqdm import tqdm
 from loguru import logger
-import argparse
-import numpy as np
 from torchmetrics.classification import MultilabelF1Score as F1_score
 from torchmetrics.classification import MultilabelRecall as Recall
 from torchmetrics.classification import MultilabelPrecision as Precision
@@ -15,13 +22,16 @@ from torchmetrics.classification import MultilabelAUROC as AUROC
 from torchmetrics.classification import MulticlassRecall, MulticlassSpecificity
 from torcheval.metrics import MultilabelAUPRC as AUPRC
 from torcheval.metrics import MulticlassAUROC, MulticlassAccuracy, MulticlassAUPRC
-from typing import Iterable
+
+# Import custom modules
+PROJECT_ROOT = Path(__file__).parents[0]
+sys.path.append(str(PROJECT_ROOT))
+
+from metrics import CinC2020
 from hubert_ecg import HuBERTECG as HuBERT
 from hubert_ecg import HuBERTECGConfig
 from hubert_ecg_classification import HuBERTForECGClassification as HuBERTClassification
-from metrics import CinC2020
-import os
-from transformers import HubertConfig
+
 
 def random_crop(ecg, crop_size=500):
     '''
@@ -193,18 +203,20 @@ if __name__ == "__main__":
     
     cpu_device = torch.device('cpu')
     
-    checkpoint = torch.load(args.model_path, map_location = cpu_device)
+    checkpoint = torch.load(args.model_path, map_location = cpu_device, weights_only=False)
     
     config = checkpoint["model_config"]
 
     # this if is to ensure compatibility with models trained with the old version of the code where we had HubertConfig and not custom config as HuBERTECGConfig
     if type(config) == HubertConfig:
         config = HuBERTECGConfig(ensemble_length=1, vocab_sizes=[100], **config.to_dict())
-
+    config.conv_pos_batch_norm = False  # 🛠️
+    
     pretrained_hubert = HuBERT(config)
 
     keys = list(checkpoint['model_state_dict'].keys())    
     num_labels = checkpoint['finetuning_vocab_size']
+    #num_labels = checkpoint['pretraining_vocab_sizes'][0] # 🛠️
 
     if checkpoint['linear']:
         classifier_hidden_size = None
@@ -212,13 +224,15 @@ if __name__ == "__main__":
         classifier_hidden_size = None
     else:
         classifier_hidden_size = checkpoint['model_state_dict'][keys[-2]].size(-1)
-        
+    #classifier_hidden_size = checkpoint['model_state_dict'][keys[-2]].size(-1)  # 🛠️
+
     hubert = HuBERTClassification(
         pretrained_hubert,
         num_labels=num_labels,
         classifier_hidden_size=classifier_hidden_size,
         use_label_embedding=checkpoint['use_label_embedding'])
-    
+        #use_label_embedding=False)  # 🛠️
+
     # In some transformers versions, "hubert_ecg.encoder.pos_conv_embed.conv.parametrizations.weight.original0", "hubert_ecg.encoder.pos_conv_embed.conv.parametrizations.weight.original1"
     # have been moved to "hubert_ecg.encoder.pos_conv_embed.conv.weight_g", "hubert_ecg.encoder.pos_conv_embed.conv.weight_v". 
     # The following snippet ensures the model state is loaded properly in case of version mismatch

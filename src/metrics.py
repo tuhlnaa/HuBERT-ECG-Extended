@@ -75,10 +75,10 @@ def compute_modified_confusion_matrix(labels, outputs):
     return A
 
 class CinC2020(Metric):
-            '''
-            Pytorch implementation of the CinC2020 Physionet Challenge metric.
-            Only weighted conditions are considered
-            '''
+    '''
+    Pytorch implementation of the CinC2020 Physionet Challenge metric.
+    Only weighted conditions are considered
+    '''
     def __init__(self, conditions, weights_path : str = "/path/to/weights.csv", verbose : bool = False):
         super().__init__()
         self.verbose = verbose

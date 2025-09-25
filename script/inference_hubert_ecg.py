@@ -1,12 +1,11 @@
-import json
 import sys
-from matplotlib import pyplot as plt
+import json
 import torch
-import numpy as np
 import pandas as pd
 
 from pathlib import Path
 from torch.utils.data import DataLoader
+from matplotlib import pyplot as plt
 
 # Import custom modules
 PROJECT_ROOT = Path(__file__).parents[1]
@@ -24,8 +23,8 @@ def main():
 
     args = {
         'model_path': "./output/model_weights/hubert_ecg_large_weights_only.pt",
-        'path_to_dataset_csv': './reproducibility/ptb/ptb_test_0.csv',
-        'ecg_dir_path': './output/PTB',
+        'path_to_dataset_csv': './reproducibility/ptbxl/ptbxl_all_test.csv',
+        'ecg_dir_path': './output/PTB-XL',
         'num_labels': num_labels,
         'label_start_index': 4,
         'tta': False,
@@ -36,19 +35,23 @@ def main():
         # 'task': 'multi_class',
         'return_full_length': True,
     }
-
+    print(num_labels) # 164
+    
     # Load the JSON
     with open("./configs/model_config.json", 'r') as f:
         config_dict = json.load(f)
 
     config = HuBERTECGConfig(**config_dict)
+    config.conv_pos_batch_norm = False
     use_label_embedding = False
+    
     print({
         'num_labels': args['num_labels'],
         'classifier_hidden_size': config.classifier_proj_size,
         'use_label_embedding': use_label_embedding,
     })
-
+    # {'num_labels': 164, 'classifier_hidden_size': 512, 'use_label_embedding': False}
+    
     pretrained_hubert = HuBERT(config)
 
     hubert = HuBERTClassification(
@@ -128,13 +131,15 @@ def main():
 
     print(logits.shape) # [64, 187, 960]
 
+    probs = torch.sigmoid(logits)
+
     # [BS x num_labels] * N_AUGS
     # probs = torch.sigmoid(logits) if args['task'] == 'multi_label' else torch.softmax(logits, dim=-1)
 
     # average probs over augmented batches for tta
     # probs = torch.stack(probs).mean(dim=0) if args['tta_aggregation'] == 'mean' else torch.stack(probs).max(dim=0).values
 
-    probs = torch.sigmoid(logits)
+    
     print(probs.shape) # [64, 187, 960]
 
     threshold = 0.5
