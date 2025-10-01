@@ -11,9 +11,9 @@ from matplotlib import pyplot as plt
 PROJECT_ROOT = Path(__file__).parents[1]
 sys.path.append(str(PROJECT_ROOT))
 
-from src.hubert_ecg import HuBERTECGConfig, HuBERTECG as HuBERT
-from src.hubert_ecg_classification import HuBERTForECGClassification as HuBERTClassification
-from src.dataset import ECGDataset
+from HuBert_ECG.hubert_ecg import HuBERTECGConfig, HuBERTECG as HuBERT
+from HuBert_ECG.hubert_ecg_classification import HuBERTForECGClassification as HuBERTClassification
+from HuBert_ECG.dataset import ECGDataset
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

@@ -123,6 +123,7 @@ class HuBERTECG(HubertModel):
         )
         hidden_states = encoder_outputs[0]
         if not return_dict:
+            print(type(hidden_states), type(encoder_outputs), type(mask_time_indices))
             return (hidden_states,) + encoder_outputs[1:] + mask_time_indices
         final_dict = BaseModelOutput(
             last_hidden_state=hidden_states,

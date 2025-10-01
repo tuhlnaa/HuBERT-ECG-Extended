@@ -52,7 +52,8 @@ def finetune(args):
     device = torch.device('cuda')
     
     ### NOTE: comment for sweeps, uncomment for normal run ###
-    wandb.init(entity="my-entity", project="my-project", group="supervised")
+    #wandb.init(entity="my-entity", project="my-project", group="supervised")
+    wandb.init(project="my-project", group="supervised")
 
     if args.wandb_run_name is not None:
         wandb.run.name = args.wandb_run_name
@@ -64,7 +65,7 @@ def finetune(args):
     
     train_set = ECGDataset(
         path_to_dataset_csv=args.path_to_dataset_csv_train,
-        ecg_dir_path="/data/ECG_AF/train_self_supervised",
+        ecg_dir_path="./output/PTB-XL", # "/data/ECG_AF/train_self_supervised",
         label_start_index=args.label_start_index,
         downsampling_factor=args.downsampling_factor,
         pretrain=False,
@@ -75,7 +76,7 @@ def finetune(args):
 
     val_set = ECGDataset(
         path_to_dataset_csv=args.path_to_dataset_csv_val,
-        ecg_dir_path="/data/ECG_AF/val_self_supervised",
+        ecg_dir_path="./output/PTB-XL", # "/data/ECG_AF/val_self_supervised",
         label_start_index=args.label_start_index,
         downsampling_factor=args.downsampling_factor,
         pretrain=False,
@@ -130,13 +131,14 @@ def finetune(args):
         
         logger.info(f"Loading pretraining checkpoint {args.load_path.split('/')[-1]} to resume finetuning")
         
-        checkpoint = torch.load(args.load_path, map_location = 'cpu')
+        checkpoint = torch.load(args.load_path, map_location = 'cpu', weights_only=False)
 
         config = checkpoint['model_config']
 
         if type(config) == HubertConfig:
             config = HuBERTECGConfig(**config.to_dict())
-            
+        config.conv_pos_batch_norm = False
+        
         pretrained_hubert = HuBERT(config)
         
         assert checkpoint['finetuning_vocab_size'] == args.vocab_size, "Vocab size mismatch"
@@ -282,24 +284,26 @@ def finetune(args):
     else:
         logger.info(f"Loading pretraining checkpoint {args.load_path.split('/')[-1]} to start finetuning")
                 
-        checkpoint = torch.load(args.load_path, map_location = 'cpu')
+        checkpoint = torch.load(args.load_path, map_location = 'cpu', weights_only=False)
         config = checkpoint['model_config']
         if type(config) == HubertConfig:
             config = HuBERTECGConfig(**config.to_dict())
         config.layerdrop = args.finetuning_layerdrop
+        config.conv_pos_batch_norm = False
 
         pretrained_hubert = HuBERT(config)
-        hubert.hubert_ecg.load_state_dict(checkpoint['model_state_dict']) # load backbone weights
-        
+
         # restore original p-dropout or set multipliers
         for name, module in pretrained_hubert.named_modules():
             if 'dropout' in name:
                 module.p = 0.1 + DROPOUT_DYNAMIC_REG_FACTOR * args.model_dropout_mult
         
         hubert = HuBERTClassification(pretrained_hubert, num_labels=args.vocab_size, classifier_hidden_size=args.classifier_hidden_size,  use_label_embedding=args.use_label_embedding)
-        hubert.to(device)            
-        
-        
+        hubert.to(device)         
+
+        # Transfer learning: Loading a pretrained model but with a different final layer
+        hubert.hubert_ecg.load_state_dict(checkpoint['model_state_dict'], strict=False) # load backbone weights
+
         global_step = 0
         best_val_loss = float('inf')
         patience_count = 0
@@ -593,6 +597,35 @@ if __name__ == "__main__":
         type=str
     )
     
+    #vocab_size
+    parser.add_argument(
+        "vocab_size",
+        help="Vocabulary size, i.e. num of labels/clusters",
+        type=int
+    )
+    
+    #patience
+    parser.add_argument(
+        "patience",
+        help="Patience for early stopping",
+        type=int
+    )
+    
+    #batch_size
+    parser.add_argument(
+        "batch_size",
+        help="Batch_size",
+        type=int
+    )
+
+    #target_metric
+    parser.add_argument(
+        "target_metric",
+        type=str,
+        help="Target metric (macro) to optimize during finetuning",
+        choices=["f1_score", "recall", "precision", "specificity", "auroc", "auprc", "accuracy"]
+    )
+
     #sweep_dir
     parser.add_argument(
         "--sweep_dir",
@@ -623,33 +656,12 @@ if __name__ == "__main__":
         type=int
     )
     
-    #vocab_size
-    parser.add_argument(
-        "vocab_size",
-        help="Vocabulary size, i.e. num of labels/clusters",
-        type=int
-    )
-    
     #val_interval
     parser.add_argument(
         "--val_interval",
         help="[OPT.] Training steps to wait before validation. Must be specified if training_steps is used. Default None",
         type=int,
         default=None
-    )
-    
-    #patience
-    parser.add_argument(
-        "patience",
-        help="Patience for early stopping",
-        type=int
-    )
-    
-    #batch_size
-    parser.add_argument(
-        "batch_size",
-        help="Batch_size",
-        type=int
     )
     
     #downsampling_factor
@@ -667,13 +679,7 @@ if __name__ == "__main__":
         default=False
     )
     
-    #target_metric
-    parser.add_argument(
-        "target_metric",
-        type=str,
-        help="Target metric (macro) to optimize during finetuning",
-        choices=["f1_score", "recall", "precision", "specificity", "auroc", "auprc", "accuracy"]
-    )
+
     
     #accumulation_steps
     parser.add_argument(
