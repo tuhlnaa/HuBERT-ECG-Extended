@@ -1,6 +1,7 @@
 # Custom Profiles
 output/
 wandb/
+dataset/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

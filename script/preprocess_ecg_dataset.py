@@ -27,7 +27,7 @@ from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, BarColumn,
 PROJECT_ROOT = Path(__file__).parents[1]
 sys.path.append(str(PROJECT_ROOT))
 
-from src.utils import ecg_preprocessing
+from HuBert_ECG.utils import ecg_preprocessing
 
 # Configure logging
 logging.basicConfig(
@@ -295,7 +295,7 @@ def parse_arguments() -> argparse.Namespace:
     )
     
     parser.add_argument("--root-path", type=Path, help="Root directory path containing ECG dataset files")
-    parser.add_argument("--output-path", type=Path, default=Path("./output"), help="Output directory path for processed files")
+    parser.add_argument("--output-path", type=Path, default=Path("./dataset"), help="Output directory path for processed files")
     parser.add_argument("--n-processes", type=int, default=8, help="Number of processes for multiprocessing")
     
     return parser.parse_args()
