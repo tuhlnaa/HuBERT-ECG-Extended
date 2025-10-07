@@ -24,10 +24,6 @@ Deep learning models have shown remarkable performance in electrocardiogram (ECG
 
 <br>
 
-## Installation
-Clone this repository and install all the necessary dependecies written in the `requirements.txt` file with ```pip install -r requirements.txt```.
-Full installation time may take up to 1 minute.
-
 ## 🚀 Quick Start
 
 ```bash
@@ -46,7 +42,8 @@ cd HuBERT-ECG-Extended-master
 ./script/Install_dependencies.bat
 ```
 
-**Remember to pre-process your data before feeding HuBERT-ECG. Take a look at Data and Preprocessing section in the paper**
+> [!TIP]
+If you encounter errors during dependency installation, this is often caused by outdated system libraries on older Linux distributions. Try installing problematic packages directly via conda: `conda install <package_name>`
 
 <br>
 
@@ -55,6 +52,8 @@ In the `reproducibility` folder you can find all train, validation, and test spl
 As an example, you can easily fine-tune and evaluate an instance of HuBERT-ECG on PTB-XL All dataset, as shown in .sh scripts `finetune.sh` and `test.sh`.
 Thw forward pass on a single instance takes less than 1 second on an A100 GPU node, which is also the machine we ran our experiments and evaluations on.
 The splits were used in cross-validation experiments/evaluations to also mitigate the performance difference that can be be observed when using different hardware and machiens.
+
+**Remember to pre-process your data before feeding HuBERT-ECG. Take a look at Data and Preprocessing section in the paper**
 
 <br>
 
