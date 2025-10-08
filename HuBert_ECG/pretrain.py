@@ -278,7 +278,8 @@ def train(args):
             
             #logger.info("Mapped data to device")
 
-            with amp.autocast():
+            #with amp.autocast():
+            with torch.amp.autocast('cuda'):
                
                 out_encoder_dict = hubert(ecg, attention_mask=attention_mask, output_attentions=False, output_hidden_states=False, return_dict=True)
                 #logger.info("Computed encodings")

@@ -1,3 +1,4 @@
+from pathlib import Path
 import torch
 from torch.nn import functional as F
 import torch.cuda.amp as amp
@@ -28,7 +29,7 @@ from transformers import HubertConfig
 
 EPS = 1e-9
 MINIMAL_IMPROVEMENT = 1e-3
-SUPERVISED_MODEL_CKPT_PATH = "/models/checkpoints/supervised/"
+SUPERVISED_MODEL_CKPT_PATH = "./models/checkpoints/supervised/"
 DROPOUT_DYNAMIC_REG_FACTOR = 0.05
     
 
@@ -88,7 +89,7 @@ def finetune(args):
     train_dl = DataLoader(
         train_set,
         collate_fn=train_set.collate,
-        num_workers=6,
+        #num_workers=6,
         batch_size=args.batch_size,
         shuffle=True,
         pin_memory=True,
@@ -98,7 +99,7 @@ def finetune(args):
     val_dl = DataLoader(
         val_set,
         collate_fn=val_set.collate,
-        num_workers=6,
+        #num_workers=6,
         batch_size=args.batch_size,
         shuffle=False,
         pin_memory=True,
@@ -401,7 +402,8 @@ def finetune(args):
             attention_mask = attention_mask.to(device)
             labels = labels.squeeze().to(device)
             
-            with amp.autocast():
+            #with amp.autocast():
+            with torch.amp.autocast('cuda'):
                 logits, _ = hubert(ecg, attention_mask=attention_mask, output_attentions=False, output_hidden_states=False, return_dict=False)
                 loss = criterion_train(logits, labels)
                 
@@ -516,8 +518,9 @@ def finetune(args):
                     }
                     
                     checkpoint_name = f"hubert_{args.train_iteration}_iteration_{global_step}_finetuned_{wandb.run.id}.pt"
-                    
-                    torch.save(checkpoint, os.path.join(SUPERVISED_MODEL_CKPT_PATH, args.sweep_dir, checkpoint_name))
+                    Path(SUPERVISED_MODEL_CKPT_PATH).mkdir(parents=True, exist_ok=True)
+                    torch.save(checkpoint, os.path.join(SUPERVISED_MODEL_CKPT_PATH, checkpoint_name))
+                    # torch.save(checkpoint, os.path.join(SUPERVISED_MODEL_CKPT_PATH, args.sweep_dir, checkpoint_name))
                     
                     logger.info(f"New best val loss = {best_val_loss}. Checkpoint saved at step {global_step}")
                     
@@ -544,8 +547,10 @@ def finetune(args):
                     }
                     
                     checkpoint_name = f"hubert_{args.train_iteration}_iteration_{global_step}_finetuned_{wandb.run.id}.pt"
-                    
-                    torch.save(checkpoint, os.path.join(SUPERVISED_MODEL_CKPT_PATH, args.sweep_dir, checkpoint_name))
+                    Path(SUPERVISED_MODEL_CKPT_PATH).mkdir(parents=True, exist_ok=True)
+                    torch.save(checkpoint, os.path.join(SUPERVISED_MODEL_CKPT_PATH, checkpoint_name))
+                    # torch.save(checkpoint, os.path.join(SUPERVISED_MODEL_CKPT_PATH, args.sweep_dir, checkpoint_name))
+
                     
                     logger.info(f"Val loss not improved but {args.target_metric} did (= {target_score}). Checkpoint saved at step {global_step}")
                     
