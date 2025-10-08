@@ -37,13 +37,12 @@ cd HuBERT-ECG-Extended-master
 
 # Install dependencies
 # Linux
+chmod +x ./script/Install_dependencies.sh
 ./script/Install_dependencies.sh
+
 # Windows
 ./script/Install_dependencies.bat
 ```
-
-> [!TIP]
-If you encounter errors during dependency installation, this is often caused by outdated system libraries on older Linux distributions. Try installing problematic packages directly via conda: `conda install <package_name>`
 
 <br>
 
