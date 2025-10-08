@@ -26,7 +26,6 @@ class HuBERTECG(HubertModel):
     def __init__(self, config: HuBERTECGConfig):
         super().__init__(config)
         self.config = config
-        #print("A1 ==================: ", self.config.mask_time_prob)
         self.pretraining_vocab_sizes = config.vocab_sizes
             
         assert config.ensemble_length > 0 and config.ensemble_length == len(config.vocab_sizes), f"ensemble_length {config.ensemble_length} must be equal to len(vocab_sizes) {len(config.vocab_sizes)}"
@@ -36,7 +35,6 @@ class HuBERTECG(HubertModel):
 
         # embedding for codebooks
         self.label_embedding = nn.ModuleList([nn.Embedding(vocab_size, config.classifier_proj_size) for vocab_size in config.vocab_sizes])
-        #print("B1 ==================: ", self.config.mask_time_prob)
         assert len(self.final_proj) == len(self.label_embedding), f"final_proj and label_embedding must have the same length"
 
 
@@ -50,7 +48,6 @@ class HuBERTECG(HubertModel):
         Masks extracted features along time axis and/or along feature axis according to
         [SpecAugment](https://arxiv.org/abs/1904.08779).
         """
-        #print("A2 ==================: ", self.config.mask_time_prob)
         # `config.apply_spec_augment` can set masking to False
         if not getattr(self.config, "apply_spec_augment", True):
             return hidden_states
@@ -118,7 +115,6 @@ class HuBERTECG(HubertModel):
             # compute reduced attention_mask corresponding to feature vectors
             attention_mask = self._get_feature_vector_attention_mask(extract_features.shape[1], attention_mask)
         hidden_states = self.feature_projection(extract_features)
-        #print("A3 ==================: ", self.config.mask_time_prob)
         hidden_states, mask_time_indices = self._mask_hidden_states(hidden_states, mask_time_indices=mask_time_indices)
         encoder_outputs = self.encoder(
             hidden_states,
@@ -128,9 +124,11 @@ class HuBERTECG(HubertModel):
             return_dict=return_dict,
         )
         hidden_states = encoder_outputs[0]
+
         if not return_dict:
-            if mask_time_indices is None:  # 🛠️
+            if mask_time_indices is None:
                 return (hidden_states,) + encoder_outputs[1:]
+            
             return (hidden_states,) + encoder_outputs[1:] + mask_time_indices
             
         final_dict = BaseModelOutput(

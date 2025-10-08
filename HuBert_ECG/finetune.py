@@ -1,21 +1,20 @@
-from pathlib import Path
+import os
+import argparse
+import copy
+import random
+import wandb
 import torch
-from torch.nn import functional as F
-import torch.cuda.amp as amp
+import torch.optim as optim
+import numpy as np
+
 from torch.utils.data import DataLoader
 from loguru import logger
-import argparse
 from tqdm import tqdm
-from hubert_ecg import HuBERTECG as HuBERT, HuBERTECGConfig
+from transformers import HubertConfig
 from transformers import get_linear_schedule_with_warmup
-import torch.optim as optim
-import wandb
-import numpy as np
-import copy
-from hubert_ecg_classification import HuBERTForECGClassification as HuBERTClassification
-import os
+from pathlib import Path
 from math import ceil
-from dataset import ECGDataset
+
 from torchmetrics.classification import MultilabelF1Score as F1_score
 from torchmetrics.classification import MultilabelRecall as Recall
 from torchmetrics.classification import MultilabelPrecision as Precision
@@ -24,8 +23,12 @@ from torchmetrics.classification import MultilabelAUROC
 from torchmetrics.classification import MulticlassAccuracy as Accuracy
 from torchmetrics.classification import MulticlassAUROC
 from torcheval.metrics import MultilabelAUPRC as AUPRC
-import random
-from transformers import HubertConfig
+
+# Import custom modules
+from config import RichPrinter, create_parser, init_seeds, validate_args
+from dataset import ECGDataset
+from hubert_ecg import HuBERTECG as HuBERT, HuBERTECGConfig
+from hubert_ecg_classification import HuBERTForECGClassification as HuBERTClassification
 
 EPS = 1e-9
 MINIMAL_IMPROVEMENT = 1e-3
@@ -58,15 +61,15 @@ def finetune(args):
 
     if args.wandb_run_name is not None:
         wandb.run.name = args.wandb_run_name
-    
-    torch.manual_seed(42)
-    np.random.seed(42)
-    torch.cuda.manual_seed(42)
-    random.seed(42)
+    init_seeds()
+    # torch.manual_seed(42)
+    # np.random.seed(42)
+    # torch.cuda.manual_seed(42)
+    # random.seed(42)
     
     train_set = ECGDataset(
         path_to_dataset_csv=args.path_to_dataset_csv_train,
-        ecg_dir_path="./output/PTB-XL", # "/data/ECG_AF/train_self_supervised",
+        ecg_dir_path="./output/PTB", # "/data/ECG_AF/train_self_supervised",
         label_start_index=args.label_start_index,
         downsampling_factor=args.downsampling_factor,
         pretrain=False,
@@ -77,7 +80,7 @@ def finetune(args):
 
     val_set = ECGDataset(
         path_to_dataset_csv=args.path_to_dataset_csv_val,
-        ecg_dir_path="./output/PTB-XL", # "/data/ECG_AF/val_self_supervised",
+        ecg_dir_path="./output/PTB", # "/data/ECG_AF/val_self_supervised",
         label_start_index=args.label_start_index,
         downsampling_factor=args.downsampling_factor,
         pretrain=False,
@@ -357,7 +360,8 @@ def finetune(args):
         
         logger.info("Checkpoint loaded. Model ready for finetuning.")
     
-    scaler = amp.GradScaler()
+    #scaler = amp.GradScaler()
+    scaler = torch.amp.GradScaler('cuda') 
 
     epochs = args.training_steps // (len(train_dl) // accumulation_steps) + 1 if args.training_steps is not None else args.epochs
     
@@ -572,335 +576,10 @@ def finetune(args):
     logger.info("End of finetuning.")
     logger.info(f"Best val loss = {best_val_loss}")
     logger.info(f"Best val target score = {best_val_target_score}, ({args.target_metric})")
-                        
-                        
+
+
 if __name__ == "__main__":
-    
-    ### NOTE: comment for sweeps, uncomment for normal run ###
-
-    parser = argparse.ArgumentParser(description="Train Hubert-ECG")
-    
-    #train_iteration
-    parser.add_argument(
-        "train_iteration",
-        help="Hubert training iteration in {1, 2, 3}", 
-        type=int,
-        choices=[1, 2, 3]
-        )
-    
-    #path_to_dataset_csv_train
-    parser.add_argument(
-        "path_to_dataset_csv_train",
-        help="Path to the csv file containing the training dataset",
-        type=str
-    )
-    
-    #path_to_dataset_csv_val
-    parser.add_argument(
-        "path_to_dataset_csv_val",
-        help="Path to the csv file containing the validation dataset",
-        type=str
-    )
-    
-    #vocab_size
-    parser.add_argument(
-        "vocab_size",
-        help="Vocabulary size, i.e. num of labels/clusters",
-        type=int
-    )
-    
-    #patience
-    parser.add_argument(
-        "patience",
-        help="Patience for early stopping",
-        type=int
-    )
-    
-    #batch_size
-    parser.add_argument(
-        "batch_size",
-        help="Batch_size",
-        type=int
-    )
-
-    #target_metric
-    parser.add_argument(
-        "target_metric",
-        type=str,
-        help="Target metric (macro) to optimize during finetuning",
-        choices=["f1_score", "recall", "precision", "specificity", "auroc", "auprc", "accuracy"]
-    )
-
-    #sweep_dir
-    parser.add_argument(
-        "--sweep_dir",
-        help="Sweep directory. Default `.`",
-        type=str,
-        default="."
-    )
-    
-    #ramp_up_perc
-    parser.add_argument(
-        "--ramp_up_perc",
-        help="[OPT.] Percentage of training steps for the ramp up phase. Default 0.08",
-        type=float,
-        default=0.08
-    )
-    
-    #training_steps
-    parser.add_argument(
-        "--training_steps",
-        help="[OPT.] Number of training steps to perform. Use this or epochs",
-        type=int
-    )
-    
-    #epochs
-    parser.add_argument(
-        "--epochs",
-        help="[OPT.] Number of epochs to perform. Use this or training_steps",
-        type=int
-    )
-    
-    #val_interval
-    parser.add_argument(
-        "--val_interval",
-        help="[OPT.] Training steps to wait before validation. Must be specified if training_steps is used. Default None",
-        type=int,
-        default=None
-    )
-    
-    #downsampling_factor
-    parser.add_argument(
-        "--downsampling_factor",
-        help="[OPT] Downsampling factor to apply to the ECG signal",
-        type=int
-    )
-
-    #random_crop
-    parser.add_argument(
-        "--random_crop", 
-        help="Whether to perform random crop of 5 sec as data augmentation",
-        action="store_true",
-        default=False
-    )
-    
-
-    
-    #accumulation_steps
-    parser.add_argument(
-        "--accumulation_steps", 
-        help="[OPT] Number of batch gradients to accumulate before updating model params. Default 1",
-        type=int,
-        default=1
-    )
-    
-    #label_start_index
-    parser.add_argument(
-        "--label_start_index",
-        help="[OPT] Index of the first label in the dataset csv file. Default 3",
-        type=int,
-        default=3
-    )
-    
-    #freezing_steps
-    parser.add_argument(
-        "--freezing_steps",
-        help="[OPT] Number of finetuning steps to keep frozen the base model weights",
-        type=int,
-        default=None
-    )  
-    
-    #resume_finetuning
-    parser.add_argument(
-        "--resume_finetuning",
-        help="Whether to resume finetuning",
-        action="store_true",
-        default=False
-    )
-    
-    #unfreeze_conv_embedder
-    parser.add_argument(
-        "--unfreeze_conv_embedder",
-        help="[OPT] Whether to unfreeze the convolutional feature extractor during fine-tuning. Normally frozen",
-        action="store_true",
-        default=False
-    )
-    
-    #transformer_blocks_to_unfreeze
-    parser.add_argument(
-        "--transformer_blocks_to_unfreeze",
-        help="[OPT] Number of transformer blocks to unfreeze after freezing_steps. Default 0",
-        type=int,
-        default=0
-    )
-    
-    #lr
-    parser.add_argument(
-        "--lr",
-        help="[OPT] Learning rate. Default 1e-5",
-        type=float,
-        default=1e-5
-    )
-    
-    #layer_wise_lr
-    parser.add_argument(
-        "--layer_wise_lr",
-        help="[OPT] Whether to use layer-wise learning rate. Use --lr for last 4 encoding layers and head, 1e-8 for the rest",
-        action="store_true",
-        default=False
-    )
-    
-    #load_path
-    parser.add_argument(
-        "--load_path",
-        help="Path to a model checkpoint that is to load to start/resume fine-tuning",
-        type=str
-    )
-    
-    #classifier_hidden_size
-    parser.add_argument(
-        "--classifier_hidden_size",
-        help="[OPT.] Hidden size of the MLP head used for classification in finetuning. If None, then linear classifier. Default None",
-        type=int,
-        default=None
-    )
-    
-    #use_label_embedding
-    parser.add_argument(
-        "--use_label_embedding",
-        help="[OPT.] Whether to use label embeddings in the classification head. Default False",
-        action="store_true"
-    )
-
-    #intervals_for_penalty
-    parser.add_argument(
-        "--intervals_for_penalty",
-        help="['OPT.] Number of validation intervals with worsening performance to wait before applying penalizing regularization",
-        type=int,
-        default=3
-    )
-    
-    #dynamic_reg
-    parser.add_argument(
-        "--dynamic_reg",
-        help="[OPT.] Whether to apply dynamic regularization to the model. Default False",
-        action="store_true"
-    )
-    
-    #use_loss_weights
-    parser.add_argument(
-        "--use_loss_weights",
-        help="[OPT.] Whether to use loss weights in the loss function. Default False",
-        action="store_true"
-    )
-    
-    #random_init
-    parser.add_argument(
-        "--random_init",
-        help="[OPT.] Whether to initialize the model with random weights. Default False",
-        action="store_true"
-    ) 
-    
-    #largeness
-    parser.add_argument(
-        "--largeness",
-        help="[OPT.] Model largeness in {base, large, x-large} in case of random initialization. Default base",
-        type=str,
-        choices=["small", "base", "large"]
-    )
-    
-    # weight_decay_mult
-    parser.add_argument(
-        "--weight_decay_mult",
-        help="Weight decay mult. Default 1 (i.e. WD=0.01)",
-        type=int,
-        default=1
-    )
-    
-    # model_dropout_mult
-    parser.add_argument(
-        "--model_dropout_mult",
-        help="Model dropout. Default 0 (i.e. dropout=0.1)",
-        type=int,
-        default=0
-    )
-    
-    #finetuning_layerdrop
-    parser.add_argument(
-        "--finetuning_layerdrop",
-        help="Layerdrop for the finetuning phase. Default 0.1 as in pre-training",
-        type=float,
-        default=0.1
-    )
-
-    #wandb_run_name
-    parser.add_argument(
-        "--wandb_run_name",
-        help="The name to give to this run",
-        type=str,
-        default=None
-    )
-    
-    parser.add_argument(
-        '--task', 
-        help="Task to perform in {multi_class, multi_label, regression}",
-        choices=["multi_class", "multi_label", "regression"],
-        type=str,
-        default="multi_label"
-    )
-    
-    args = parser.parse_args()
-    
-    if not torch.cuda.is_available():
-        logger.error("CUDA not available. CPU finetuning not supported")
-        exit(1)
-        
-    if args.train_iteration > 3 or args.train_iteration < 1:
-        raise ValueError(f"Argument train_iteration must be an integer in [1, 3] range. Inserted {args.train_iteration}")
-    
-    if args.training_steps is None and args.epochs is None:
-        raise ValueError("One argument between training_steps and epochs must be provided")
-        
-    if args.training_steps is not None and args.val_interval is None:
-        raise ValueError("Argument val_interval must be provided if argument training_steps is provided")
-
-    if args.training_steps is not None and args.training_steps % args.val_interval != 0:
-        raise ValueError(f"Argument training_steps must be divisible by argument val_interval. Inserted {args.training_steps} and {args.val_interval}")
-    
-    if args.ramp_up_perc < 0 or args.ramp_up_perc > 1:
-        raise ValueError("Argument ramp_up_perc must be a float in [0, 1] range") 
-    
-    if args.random_init and args.resume_finetuning:
-        raise ValueError("Arguments random_init and resume_finetuning cannot be provided together")
-    
-    if (args.resume_finetuning or args.random_init == False) and args.load_path is None:
-        raise ValueError("Argument load_path must be provided when start/resume finetuning")
-       
-    if args.freezing_steps is not None and args.freezing_steps > args.training_steps:
-        raise ValueError("Argument freezing_steps cannot be greater than argument training steps")
-    
-    if args.accumulation_steps is not None and args.training_steps is not None and args.training_steps % args.accumulation_steps != 0:
-        raise ValueError("Argument training_steps must be divisible by argument accumulation_steps")
-    
-    if args.random_init and args.largeness is None:
-        raise ValueError("Argument largeness must be provided if argument random_init is provided")
-    
-    if args.random_init and args.load_path is not None:
-        logger.warning("Argument random_init is provided. Argument load_path will be ignored")
-    
-    if args.dynamic_reg and args.patience < args.intervals_for_penalty:
-        raise ValueError(f"Argument patience must be greater or equal to argument intervals_for_penalty when using dynamic_reg. Setting patience = {args.intervals_for_penalty}")
-
-    
-    print("Inserted arguments: ")
-    for arg in vars(args):
-        print(f"{arg} = {getattr(args, arg)}")
-        
-    
-    ### NOTE: this is to test sweeps ###
-
-    # wandb.init(entity="cardi-ai", project="ECG-pretraining", group=("supervised"))
-    
-    # args = wandb.config
-
-    finetune(args) 
+    args = create_parser()
+    quit()
+    # Start training
+    finetune(args)
