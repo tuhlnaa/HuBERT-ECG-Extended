@@ -129,9 +129,53 @@ def create_dataloader(
 
     return data_loader
 
+class CheckpointManager:
+    """Handles model checkpointing."""
+    
+    def __init__(self, save_dir: Path):
+        self.save_dir = Path(save_dir)
+        self.save_dir.mkdir(parents=True, exist_ok=True)
+    
+    def save(
+        self,
+        model,
+        optimizer,
+        lr_scheduler,
+        global_step: int,
+        best_val_loss: float,
+        patience_count: int,
+        args,
+        target_score: float,
+        run_id: str,
+    ):
+        """Save model checkpoint."""
+        checkpoint = {
+            'global_step': global_step,
+            'best_val_loss': best_val_loss,
+            'model_config': model.config,
+            'model_state_dict': copy.deepcopy(model.state_dict()),
+            'optimizer_state_dict': copy.deepcopy(optimizer.state_dict()),
+            'lr_scheduler_state_dict': copy.deepcopy(lr_scheduler.state_dict()),
+            'patience_count': patience_count,
+            'linear': args.classifier_hidden_size is None and not args.use_label_embedding,
+            'finetuning_vocab_size': args.vocab_size,
+            'use_label_embedding': args.use_label_embedding,
+            f'target_val_{args.target_metric}': target_score,
+        }
+
+        checkpoint_name = f"hubert_{args.train_iteration}_iteration_{global_step}_finetuned_{run_id}.pt"
+        save_path = self.save_dir / checkpoint_name
+        torch.save(checkpoint, save_path)
+        
+        return save_path
+    
 
 def finetune(args):
     init_seeds()
+
+    # Initialize checkpoint manager
+    checkpoint_manager = CheckpointManager(SUPERVISED_MODEL_CKPT_PATH)
+
     device = torch.device('cuda')
     
     wandb.init(project="my-project", group="supervised", entity=None)
@@ -556,80 +600,56 @@ def finetune(args):
                 hubert.train()
                 
                 ### save if there's improvement in loss or target metric ###
-                
-                if val_loss <= best_val_loss - MINIMAL_IMPROVEMENT: 
-                    
+
+                # Checkpoint logic
+                should_save = False
+                reason = ""
+
+                if val_loss <= best_val_loss - MINIMAL_IMPROVEMENT:
                     best_val_loss = val_loss
                     patience_count = 0
-                    checkpoint = {
-                        'global_step': global_step,
-                        'best_val_loss': best_val_loss,
-                        'model_config': hubert.config,
-                        'model_state_dict': copy.deepcopy(hubert.state_dict()),
-                        'optimizer_state_dict': copy.deepcopy(optimizer.state_dict()),
-                        'lr_scheduler_state_dict': copy.deepcopy(lr_scheduler.state_dict()),
-                        'patience_count': patience_count,
-                        'linear' : True if args.classifier_hidden_size is None and not args.use_label_embedding else False,
-                        'finetuning_vocab_size' : args.vocab_size,
-                        'use_label_embedding' : args.use_label_embedding,
-                        f'target_val_{args.target_metric}': target_score
-                    }
-                    
-                    checkpoint_name = f"hubert_{args.train_iteration}_iteration_{global_step}_finetuned_{wandb.run.id}.pt"
-                    Path(SUPERVISED_MODEL_CKPT_PATH).mkdir(parents=True, exist_ok=True)
-                    torch.save(checkpoint, os.path.join(SUPERVISED_MODEL_CKPT_PATH, checkpoint_name))
-                    # torch.save(checkpoint, os.path.join(SUPERVISED_MODEL_CKPT_PATH, args.sweep_dir, checkpoint_name))
-                    
-                    logger.info(f"New best val loss = {best_val_loss}. Checkpoint saved at step {global_step}")
-                    
-                    dynamic_regularizer(optimizer=optimizer, model=hubert, penalty=False) if args.dynamic_reg else None # reward for loss
-                                
-                elif target_score >= best_val_target_score + MINIMAL_IMPROVEMENT:
-                    
-                    best_val_target_score = target_score
-                    
-                    # do not increment patience count but do not reset it either
-                    
-                    checkpoint = {
-                        'global_step': global_step,
-                        'best_val_loss': best_val_loss,
-                        'model_config': hubert.config,
-                        'model_state_dict': copy.deepcopy(hubert.state_dict()),
-                        'optimizer_state_dict': copy.deepcopy(optimizer.state_dict()),
-                        'lr_scheduler_state_dict': copy.deepcopy(lr_scheduler.state_dict()),
-                        'patience_count': patience_count,
-                        'linear' : True if args.classifier_hidden_size is None and not args.use_label_embedding else False,
-                        'finetuning_vocab_size' : args.vocab_size,
-                        'use_label_embedding' : args.use_label_embedding,
-                        f'target_val_{args.target_metric}': target_score
-                    }
-                    
-                    checkpoint_name = f"hubert_{args.train_iteration}_iteration_{global_step}_finetuned_{wandb.run.id}.pt"
-                    Path(SUPERVISED_MODEL_CKPT_PATH).mkdir(parents=True, exist_ok=True)
-                    torch.save(checkpoint, os.path.join(SUPERVISED_MODEL_CKPT_PATH, checkpoint_name))
-                    # torch.save(checkpoint, os.path.join(SUPERVISED_MODEL_CKPT_PATH, args.sweep_dir, checkpoint_name))
+                    should_save = True
+                    reason = f"New best val loss = {best_val_loss:.4f}"
 
+                    # Reward for loss
+                    if args.dynamic_reg:
+                        dynamic_regularizer(optimizer, hubert, penalty=False)
+
+                elif target_score >= best_val_target_score + MINIMAL_IMPROVEMENT:
+                    best_val_target_score = target_score
+                    should_save = True
+                    reason = f"Val loss not improved but {args.target_metric} improved (= {target_score:.4f})"
                     
-                    logger.info(f"Val loss not improved but {args.target_metric} did (= {target_score}). Checkpoint saved at step {global_step}")
-                    
-                    dynamic_regularizer(optimizer=optimizer, model=hubert, penalty=False) if args.dynamic_reg else None # reward for target metric
-                    
-                else: # loss not improved and target metric not improved
+                    # Reward for target metric
+                    if args.dynamic_reg:
+                        dynamic_regularizer(optimizer, hubert, penalty=False)
+
+                # Loss not improved and target metric not improved
+                else:
                     patience_count += 1
                     
-                    if args.dynamic_reg and patience_count % (args.patience // args.intervals_for_penalty) == 0 and patience_count != args.patience:
-                        dynamic_regularizer(optimizer=optimizer, model=hubert, penalty=True) # penalize model with regularization but not too much
-                                
-                    if patience_count == args.patience:
-                        logger.warning(f"Early stopping at step {global_step}.")
-                        wandb.log({
-                            "patience_count": patience_count
-                            })
+                    if args.dynamic_reg:
+                        penalty_interval = args.patience // args.intervals_for_penalty
+                        if patience_count % penalty_interval == 0 and patience_count != args.patience:
+                            dynamic_regularizer(optimizer, hubert, penalty=True)
+                    
+                    if patience_count >= args.patience:
+                        logger.warning(f"Early stopping at step {global_step}")
+                        wandb.log({"patience_count": patience_count})
                         return
                 
+                if should_save:
+                    checkpoint_manager.save(
+                        hubert, optimizer, lr_scheduler,
+                        global_step, best_val_loss, patience_count,
+                        args, target_score, wandb.run.id
+                    )
+                    logger.info(f"{reason}. Checkpoint saved at step {global_step}")
+
+    # Training completed
     logger.info("End of finetuning.")
-    logger.info(f"Best val loss = {best_val_loss}")
-    logger.info(f"Best val target score = {best_val_target_score}, ({args.target_metric})")
+    logger.info(f"Best val loss = {best_val_loss:.4f}")
+    logger.info(f"Best val {args.target_metric} = {best_val_target_score:.4f}")
 
 
 if __name__ == "__main__":
