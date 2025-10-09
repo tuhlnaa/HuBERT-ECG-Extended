@@ -26,6 +26,7 @@ from torchmetrics.classification import MultilabelRecall as Recall
 from torchmetrics.classification import MultilabelSpecificity as Specificity
 
 # Import custom modules
+from metricsV2 import FinetuneMetrics
 from config import create_parser, init_seeds
 from dataset import ECGDataset
 from hubert_ecg import HuBERTECG as HuBERT, HuBERTECGConfig
@@ -458,35 +459,26 @@ def finetune(args):
         
         logger.info("Checkpoint loaded. Model ready for finetuning.")
     
-    #scaler = amp.GradScaler()
+    # ...
+    pass
+    # Ignore the previous code
+
     scaler = torch.amp.GradScaler('cuda') 
 
     epochs = args.training_steps // (len(train_loader) // accumulation_steps) + 1 if args.training_steps is not None else args.epochs
     
     start_epoch = global_step // len(train_loader)
+
+    # Initialize metrics tracker
+    val_metrics = FinetuneMetrics(
+        task=args.task,
+        num_labels=args.vocab_size,
+        split='val'
+    ).to(device)
     
-    task2metric = {
-        'multi_label': {
-                        "f1-score" : F1_score(num_labels=args.vocab_size, average=None),
-                        "recall" : Recall(num_labels=args.vocab_size, average=None),
-                        "specificity" : Specificity(num_labels=args.vocab_size, average=None),
-                        "precision" : Precision(num_labels=args.vocab_size, average=None),
-                        "auroc" : MultilabelAUROC(num_labels=args.vocab_size, average=None),
-                        "auprc" : AUPRC(num_labels=args.vocab_size, average=None),
-        },
-        'multi_class': {
-                        'accuracy' : Accuracy(num_classes=args.vocab_size),
-                        'auroc' : MulticlassAUROC(num_classes=args.vocab_size)
-            },
-        'regression' : {}
-    }
-    
-    metrics = task2metric[args.task]
-    
-    assert args.target_metric in metrics.keys(), f"Target metric {args.target_metric} not available for task {args.task}"
-    
-    for name, metric in metrics.items():
-        metric.to(device)
+    # Validate that target metric is available
+    if args.target_metric not in val_metrics.metrics.keys():
+        raise ValueError(f"Target metric {args.target_metric} not available for task {args.task}")
     
     for epoch in range(start_epoch, epochs):
     
@@ -504,12 +496,10 @@ def finetune(args):
             attention_mask = attention_mask.to(device)
             labels = labels.squeeze().to(device)
             
-            #with amp.autocast():
             with torch.amp.autocast('cuda'):
                 logits, _ = hubert(ecg, attention_mask=attention_mask, output_attentions=False, output_hidden_states=False, return_dict=False)
                 loss = criterion_train(logits, labels)
-                
-                loss /= accumulation_steps # normalize loss
+                loss /= accumulation_steps  # Normalize loss
                 
             scaler.scale(loss).backward() # accumulate normalized loss
             train_losses.append(loss.item())                
@@ -522,7 +512,7 @@ def finetune(args):
                 
             if args.freezing_steps is not None and global_step >= args.freezing_steps:
                 
-                # unfreeze what you wanted to unfreeze, as specificied by user input
+                # Unfreeze what you wanted to unfreeze, as specified by user input
                 hubert.set_transformer_blocks_trainable(n_blocks=args.transformer_blocks_to_unfreeze)
                 hubert.set_feature_extractor_trainable(args.unfreeze_conv_embedder)
                 
@@ -543,14 +533,11 @@ def finetune(args):
             
             ### validation ###        
             if global_step % args.val_interval == 0:
-                
                 hubert.eval()
-                
-                # reset metrics and losses                
-                val_losses = []                
-                for name, metric in metrics.items():
-                    metric.reset()
-                
+        
+                # Reset metrics for new validation cycle
+                val_metrics.reset()
+
                 logger.info("Start validation at step {}".format(global_step))
                 
                 ### validation loop ###
@@ -563,40 +550,32 @@ def finetune(args):
                         logits, _ = hubert(ecg, attention_mask=None, output_attentions=False, output_hidden_states=False, return_dict=False)
                         loss = criterion_val(logits, labels)
                     
-                    val_losses.append(loss.item())
-                    
-                    labels = labels.long() # for metrics
-                    
-                    # compute metrics on single batch
-                    for name, metric in metrics.items():
-                        metric.update(logits, labels)
-                    
-                ### end of validation loop ###
+                    # Update metrics with batch data
+                    val_metrics.update(logits, labels, loss)
+
+                # Compute all metrics
+                metrics_dict = val_metrics.compute()
                 
-                val_loss = np.mean(val_losses)
+                # Extract key values
+                val_loss = metrics_dict['val_loss']
+                
                 train_loss = np.mean(train_losses)
-                train_losses.clear() # to keep train loss aligned with val loss
+                train_losses.clear()  # to keep train loss aligned with val loss
                 
-                                
-                # log non averaged metrics [1, vocab_size]
-                logger.info("Validation loss = {}".format(val_loss))
-                    
-                # compute metrics on whole validation set and log them
-                # such metrics are vectors num_labels long containing the metric for each label
-                for name, metric in metrics.items():
-                    score = metric.compute()
-                    macro = score.mean()
-                    logger.info(f"Validation {name} = {score}, macro: {macro}")
-                    wandb.log({f"Validation_{name}": macro})
-                    if name == args.target_metric:
-                        target_score = macro
+                # Get target metric score
+                target_score = val_metrics.get_target_metric(args.target_metric)
                 
-                # log losses
-                wandb.log({
-                    "Training_loss": train_loss,
-                    "Validation_loss": val_loss,
-                    })
-                    
+                # Log metrics to wandb
+                wandb.log({"Training_loss": train_loss, "Validation_loss": val_loss}, step=global_step)
+                
+                for metric_name, metric_value in metrics_dict.items():
+                    if '_macro' in metric_name or metric_name == 'val_loss':
+                        wandb.log({metric_name: metric_value}, step=global_step)
+                
+                logger.info(f"Validation loss = {val_loss}")
+                logger.info(f"Validation {args.target_metric} (macro) = {target_score:.4f}")
+
+
                 hubert.train()
                 
                 ### save if there's improvement in loss or target metric ###
