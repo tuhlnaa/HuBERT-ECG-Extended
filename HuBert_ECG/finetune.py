@@ -1,114 +1,168 @@
-import os
-import argparse
 import copy
-import random
-import wandb
+import logging
+import os
 import torch
-import torch.optim as optim
-import numpy as np
+import wandb
 
+import numpy as np
+import torch.nn as nn
+import torch.optim as optim
+
+from math import ceil
+from pathlib import Path
+from rich.logging import RichHandler
 from torch.utils.data import DataLoader
-from loguru import logger
 from tqdm import tqdm
 from transformers import HubertConfig
 from transformers import get_linear_schedule_with_warmup
-from pathlib import Path
-from math import ceil
 
-from torchmetrics.classification import MultilabelF1Score as F1_score
-from torchmetrics.classification import MultilabelRecall as Recall
-from torchmetrics.classification import MultilabelPrecision as Precision
-from torchmetrics.classification import MultilabelSpecificity as Specificity
+from torcheval.metrics import MultilabelAUPRC as AUPRC
+from torchmetrics.classification import MulticlassAUROC
 from torchmetrics.classification import MultilabelAUROC
 from torchmetrics.classification import MulticlassAccuracy as Accuracy
-from torchmetrics.classification import MulticlassAUROC
-from torcheval.metrics import MultilabelAUPRC as AUPRC
+from torchmetrics.classification import MultilabelF1Score as F1_score
+from torchmetrics.classification import MultilabelPrecision as Precision
+from torchmetrics.classification import MultilabelRecall as Recall
+from torchmetrics.classification import MultilabelSpecificity as Specificity
 
 # Import custom modules
-from config import RichPrinter, create_parser, init_seeds, validate_args
+from config import create_parser, init_seeds
 from dataset import ECGDataset
 from hubert_ecg import HuBERTECG as HuBERT, HuBERTECGConfig
 from hubert_ecg_classification import HuBERTForECGClassification as HuBERTClassification
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(message)s", 
+    handlers=[RichHandler()]
+)
+logger = logging.getLogger(__name__)
+
 EPS = 1e-9
 MINIMAL_IMPROVEMENT = 1e-3
 SUPERVISED_MODEL_CKPT_PATH = "./models/checkpoints/supervised/"
-DROPOUT_DYNAMIC_REG_FACTOR = 0.05
-    
+DROPOUT_ADJUSTMENT = 0.05
+WEIGHT_DECAY_MULTIPLIER = 5.0
 
-def dynamic_regularizer(optimizer, model, penalty):
+
+def dynamic_regularizer(
+    optimizer: torch.optim.Optimizer,
+    model: nn.Module,
+    penalty: bool,
+    param_group_idx: int = 0
+) -> None:
+    """
+    Dynamically adjust regularization strength based on training conditions.
+    
+    Args:
+        optimizer: PyTorch optimizer with weight_decay parameter
+        model: Neural network model containing dropout layers
+        penalty: If True, increase regularization; if False, decrease it
+        param_group_idx: Which parameter group to modify (default: 0)
+    """
+    # Adjust weight decay
+    current_wd = optimizer.param_groups[param_group_idx]['weight_decay']
+    
     if penalty:
-        # penalizing model with regularization but not too much
-        optimizer.param_groups[0]['weight_decay'] *= 5
-        for name, module in model.named_modules():
-            if 'dropout' in name:
-                module.p += 0.05
+        new_wd = min(current_wd * WEIGHT_DECAY_MULTIPLIER, 1.0)
     else:
-        # unburdening model from regularization
-        # minimum attainable weight decay is 0.01, dropout is 0.1
-        optimizer.param_groups[0]['weight_decay'] = max(0.01, optimizer.param_groups[0]['weight_decay'] / 5)
-        for name, module in model.named_modules():
-            if 'dropout' in name:
-                module.p = max(0.1, module.p - DROPOUT_DYNAMIC_REG_FACTOR)
+        new_wd = max(current_wd / WEIGHT_DECAY_MULTIPLIER, 0.01)
+    
+    optimizer.param_groups[param_group_idx]['weight_decay'] = new_wd
+    
+    # Adjust dropout rates
+    for module in model.modules():
+        if isinstance(module, nn.Dropout):
+            if penalty:
+                module.p = min(module.p + DROPOUT_ADJUSTMENT, 0.9)
+            else:
+                module.p = max(module.p - DROPOUT_ADJUSTMENT, 0.1)
+
+
+def create_dataloader(
+    csv_path: str,
+    ecg_dir: str,
+    batch_size: int,
+    label_start_idx: int = 3,
+    downsample_factor: int = None,
+    random_crop: bool = False,
+    shuffle: bool = True,
+    is_pretrain: bool = False,
+) -> DataLoader:
+    """Create a DataLoader for ECG dataset.
+    
+    Args:
+        csv_path: Path to dataset CSV file
+        ecg_dir: Directory containing ECG data
+        batch_size: Batch size for DataLoader
+        label_start_idx: Starting index of labels in CSV
+        downsample_factor: Factor for downsampling ECG signals
+        random_crop: Whether to apply random 5s crop augmentation
+        shuffle: Whether to shuffle data
+        is_pretrain: Whether this is for pretraining mode
+
+    Returns:
+        Configured DataLoader instance
+    """
+    dataset = ECGDataset(
+        path_to_dataset_csv=csv_path,
+        ecg_dir_path=ecg_dir,
+        label_start_index=label_start_idx,
+        downsampling_factor=downsample_factor,
+        pretrain=is_pretrain,
+        random_crop=random_crop,
+    )
+
+    if len(dataset) == 0:
+        raise ValueError(f"Dataset is empty! No images found. Please check the paths and file formats.")
+    
+    data_loader = DataLoader(
+        dataset,
+        collate_fn=dataset.collate,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        pin_memory=True,
+        drop_last=True,
+    )
+    print(f"Dataset samples: {len(dataset)}, DataLoader batches: {len(data_loader)}")
+
+    return data_loader
+
 
 def finetune(args):
-    
+    init_seeds()
     device = torch.device('cuda')
     
-    ### NOTE: comment for sweeps, uncomment for normal run ###
-    #wandb.init(entity="my-entity", project="my-project", group="supervised")
-    wandb.init(project="my-project", group="supervised")
+    wandb.init(project="my-project", group="supervised", entity=None)
 
     if args.wandb_run_name is not None:
         wandb.run.name = args.wandb_run_name
-    init_seeds()
-    # torch.manual_seed(42)
-    # np.random.seed(42)
-    # torch.cuda.manual_seed(42)
-    # random.seed(42)
-    
-    train_set = ECGDataset(
-        path_to_dataset_csv=args.path_to_dataset_csv_train,
-        ecg_dir_path="./output/PTB", # "/data/ECG_AF/train_self_supervised",
-        label_start_index=args.label_start_index,
-        downsampling_factor=args.downsampling_factor,
-        pretrain=False,
-        random_crop=args.random_crop
-    )
 
-    train_pos_weights = train_set.weights.to(device) if args.use_loss_weights else None
-
-    val_set = ECGDataset(
-        path_to_dataset_csv=args.path_to_dataset_csv_val,
-        ecg_dir_path="./output/PTB", # "/data/ECG_AF/val_self_supervised",
-        label_start_index=args.label_start_index,
-        downsampling_factor=args.downsampling_factor,
-        pretrain=False,
-        random_crop=args.random_crop
-        )
-    
-    val_pos_weights = val_set.weights.to(device) if args.use_loss_weights else None
-    
-    train_dl = DataLoader(
-        train_set,
-        collate_fn=train_set.collate,
-        #num_workers=6,
+    train_loader = create_dataloader(
+        csv_path=args.path_to_dataset_csv_train,
+        ecg_dir=args.ecg_dir,
         batch_size=args.batch_size,
+        label_start_idx=args.label_start_index,
+        downsample_factor=args.downsampling_factor,
+        random_crop=args.random_crop,
         shuffle=True,
-        pin_memory=True,
-        drop_last=True
-        )
-
-    val_dl = DataLoader(
-        val_set,
-        collate_fn=val_set.collate,
-        #num_workers=6,
-        batch_size=args.batch_size,
-        shuffle=False,
-        pin_memory=True,
-        drop_last=True
-        )
+    )
     
+    val_loader = create_dataloader(
+        csv_path=args.path_to_dataset_csv_val,
+        ecg_dir=args.ecg_dir,
+        batch_size=args.batch_size,
+        label_start_idx=args.label_start_index,
+        downsample_factor=args.downsampling_factor,
+        random_crop=args.random_crop,
+        shuffle=False,
+    )
+    
+    train_pos_weights = train_loader.dataset.weights.to(device) if args.use_loss_weights else None
+    val_pos_weights = val_loader.dataset.weights.to(device) if args.use_loss_weights else None
+    
+
     lr = args.lr
     betas = (0.9, 0.98)
     weight_decay = max(0, 0.01 * args.weight_decay_mult)
@@ -124,13 +178,13 @@ def finetune(args):
     criterion_train = criterion[0].to(device)
     criterion_val = criterion[1].to(device)
     
-    args.training_steps = args.training_steps if args.training_steps is not None else ((args.epochs - 1) * (len(train_dl) // accumulation_steps))
+    args.training_steps = args.training_steps if args.training_steps is not None else ((args.epochs - 1) * (len(train_loader) // accumulation_steps))
     
-    args.val_interval = len(train_dl) if args.val_interval is None else args.val_interval
+    args.val_interval = len(train_loader) if args.val_interval is None else args.val_interval
     
     logger.info(f"{args.training_steps} training steps to perform")
     logger.info(f"{args.val_interval} steps to wait before validation")
-    
+
     if args.resume_finetuning:
         
         logger.info(f"Loading pretraining checkpoint {args.load_path.split('/')[-1]} to resume finetuning")
@@ -247,11 +301,11 @@ def finetune(args):
             conv_stride = conv_stride,
             conv_dim = conv_dim,
             mask_time_length = 1,
-            hidden_dropout=max(0, 0.1 + DROPOUT_DYNAMIC_REG_FACTOR * args.model_dropout_mult),
-            activation_dropout=max(0, 0.1 + DROPOUT_DYNAMIC_REG_FACTOR * args.model_dropout_mult),
-            attention_dropout=max(0, 0.1 + DROPOUT_DYNAMIC_REG_FACTOR * args.model_dropout_mult),
-            feat_proj_dropout=max(0, 0 + DROPOUT_DYNAMIC_REG_FACTOR * args.model_dropout_mult),
-            final_dropout=max(0, 0.1 + DROPOUT_DYNAMIC_REG_FACTOR * args.model_dropout_mult),    
+            hidden_dropout=max(0, 0.1 + DROPOUT_ADJUSTMENT * args.model_dropout_mult),
+            activation_dropout=max(0, 0.1 + DROPOUT_ADJUSTMENT * args.model_dropout_mult),
+            attention_dropout=max(0, 0.1 + DROPOUT_ADJUSTMENT * args.model_dropout_mult),
+            feat_proj_dropout=max(0, 0 + DROPOUT_ADJUSTMENT * args.model_dropout_mult),
+            final_dropout=max(0, 0.1 + DROPOUT_ADJUSTMENT * args.model_dropout_mult),    
         ) # + other default params
         
         hubert = HuBERT(config)
@@ -300,7 +354,7 @@ def finetune(args):
         # restore original p-dropout or set multipliers
         for name, module in pretrained_hubert.named_modules():
             if 'dropout' in name:
-                module.p = 0.1 + DROPOUT_DYNAMIC_REG_FACTOR * args.model_dropout_mult
+                module.p = 0.1 + DROPOUT_ADJUSTMENT * args.model_dropout_mult
         
         hubert = HuBERTClassification(pretrained_hubert, num_labels=args.vocab_size, classifier_hidden_size=args.classifier_hidden_size,  use_label_embedding=args.use_label_embedding)
         hubert.to(device)         
@@ -363,9 +417,9 @@ def finetune(args):
     #scaler = amp.GradScaler()
     scaler = torch.amp.GradScaler('cuda') 
 
-    epochs = args.training_steps // (len(train_dl) // accumulation_steps) + 1 if args.training_steps is not None else args.epochs
+    epochs = args.training_steps // (len(train_loader) // accumulation_steps) + 1 if args.training_steps is not None else args.epochs
     
-    start_epoch = global_step // len(train_dl)
+    start_epoch = global_step // len(train_loader)
     
     task2metric = {
         'multi_label': {
@@ -398,7 +452,7 @@ def finetune(args):
         
         train_losses = []
         
-        for ecg, attention_mask, labels in tqdm(train_dl, total=len(train_dl)):
+        for ecg, attention_mask, labels in tqdm(train_loader, total=len(train_loader)):
             
             global_step += 1
             
@@ -456,7 +510,7 @@ def finetune(args):
                 logger.info("Start validation at step {}".format(global_step))
                 
                 ### validation loop ###
-                for ecg, _, labels in tqdm(val_dl, total=len(val_dl)):
+                for ecg, _, labels in tqdm(val_loader, total=len(val_loader)):
                     
                     ecg = ecg.to(device)
                     labels = labels.squeeze().to(device)
@@ -580,6 +634,6 @@ def finetune(args):
 
 if __name__ == "__main__":
     args = create_parser()
-    quit()
+
     # Start training
     finetune(args)

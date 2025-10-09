@@ -21,25 +21,60 @@ from transformers import HubertConfig
 
 EPS = 1E-09
 MINIMAL_IMPROVEMENT = 1e-3
-DROPOUT_DYNAMIC_REG_FACTOR = 0.05
-
+DROPOUT_ADJUSTMENT = 0.05
+WEIGHT_DECAY_MULTIPLIER = 5.0
 SELF_SUPERVISED_MODEL_CKPT_PATH = "/path/to/models/checkpoints/self-supervised/"
 
-def dynamic_regularizer(optimizer, model, penalty):
-    if penalty:
-        # penalizing model with regularization but not too much
-        optimizer.param_groups[0]['weight_decay'] *= 5
-        for name, module in model.named_modules():
-            if 'dropout' in name:
-                module.p += DROPOUT_DYNAMIC_REG_FACTOR
-    else:
-        # unburdening model from regularization
-        # minimum attainable weight decay is 0.01, dropout is 0.1
-        optimizer.param_groups[0]['weight_decay'] = max(0.01, optimizer.param_groups[0]['weight_decay'] / 5)
-        for name, module in model.named_modules():
-            if 'dropout' in name:
-                module.p = max(0.1, module.p - DROPOUT_DYNAMIC_REG_FACTOR)
+# def dynamic_regularizer(optimizer, model, penalty):
+#     if penalty:
+#         # penalizing model with regularization but not too much
+#         optimizer.param_groups[0]['weight_decay'] *= 5
+#         for name, module in model.named_modules():
+#             if 'dropout' in name:
+#                 module.p += DROPOUT_ADJUSTMENT
+#     else:
+#         # unburdening model from regularization
+#         # minimum attainable weight decay is 0.01, dropout is 0.1
+#         optimizer.param_groups[0]['weight_decay'] = max(0.01, optimizer.param_groups[0]['weight_decay'] / 5)
+#         for name, module in model.named_modules():
+#             if 'dropout' in name:
+#                 module.p = max(0.1, module.p - DROPOUT_ADJUSTMENT)
         
+
+def dynamic_regularizer(
+    optimizer: torch.optim.Optimizer,
+    model: nn.Module,
+    penalty: bool,
+    param_group_idx: int = 0
+) -> None:
+    """
+    Dynamically adjust regularization strength based on training conditions.
+    
+    Args:
+        optimizer: PyTorch optimizer with weight_decay parameter
+        model: Neural network model containing dropout layers
+        penalty: If True, increase regularization; if False, decrease it
+        param_group_idx: Which parameter group to modify (default: 0)
+    """
+    # Adjust weight decay
+    current_wd = optimizer.param_groups[param_group_idx]['weight_decay']
+    
+    if penalty:
+        new_wd = min(current_wd * WEIGHT_DECAY_MULTIPLIER, 1.0)
+    else:
+        new_wd = max(current_wd / WEIGHT_DECAY_MULTIPLIER, 0.01)
+    
+    optimizer.param_groups[param_group_idx]['weight_decay'] = new_wd
+    
+    # Adjust dropout rates
+    for module in model.modules():
+        if isinstance(module, nn.Dropout):
+            if penalty:
+                module.p = min(module.p + DROPOUT_ADJUSTMENT, 0.9)
+            else:
+                module.p = max(module.p - DROPOUT_ADJUSTMENT, 0.1)
+
+
 
 def train(args):
      
@@ -186,11 +221,11 @@ def train(args):
             conv_stride = conv_stride,
             conv_dim = conv_dim,
             mask_time_length = 1,
-            hidden_dropout=max(0, 0.1 + DROPOUT_DYNAMIC_REG_FACTOR * args.model_dropout_mult),
-            activation_dropout=max(0, 0.1 + DROPOUT_DYNAMIC_REG_FACTOR * args.model_dropout_mult),
-            attention_dropout=max(0, 0.1 + DROPOUT_DYNAMIC_REG_FACTOR * args.model_dropout_mult),
-            feat_proj_dropout=max(0, 0 + DROPOUT_DYNAMIC_REG_FACTOR * args.model_dropout_mult),
-            final_dropout=max(0, 0.1 + DROPOUT_DYNAMIC_REG_FACTOR * args.model_dropout_mult),    
+            hidden_dropout=max(0, 0.1 + DROPOUT_ADJUSTMENT * args.model_dropout_mult),
+            activation_dropout=max(0, 0.1 + DROPOUT_ADJUSTMENT * args.model_dropout_mult),
+            attention_dropout=max(0, 0.1 + DROPOUT_ADJUSTMENT * args.model_dropout_mult),
+            feat_proj_dropout=max(0, 0 + DROPOUT_ADJUSTMENT * args.model_dropout_mult),
+            final_dropout=max(0, 0.1 + DROPOUT_ADJUSTMENT * args.model_dropout_mult),    
         ) # + other default params
         
         hubert = HuBERT(config)

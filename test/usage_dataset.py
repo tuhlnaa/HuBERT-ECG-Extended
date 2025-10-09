@@ -2,8 +2,8 @@
 Test script for ECG dataset loading and validation.
 
 Uusage:
-python test/usage_datasetV2.py ./reproducibility/ptb/ptb_train_0.csv ./reproducibility/ptb/ptb_test_0.csv 8 --random_crop
-python test/usage_datasetV2.py ./reproducibility/ptb/ptb_train_0.csv ./reproducibility/ptb/ptb_test_0.csv 8 --random_crop --downsample_factor 5
+python test/usage_dataset.py ./reproducibility/ptb/ptb_train_0.csv ./reproducibility/ptb/ptb_test_0.csv 8 --random_crop
+python test/usage_dataset.py ./reproducibility/ptb/ptb_train_0.csv ./reproducibility/ptb/ptb_test_0.csv 8 --random_crop --downsample_factor 5
 
 """
 
@@ -202,3 +202,22 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+"""
+        Dataset Statistics
+╔═════════╦══════════╦════════════╗
+║ Metric  ║ Training ║ Validation ║
+╠═════════╬══════════╬════════════╣
+║ Samples ║      406 ║        107 ║
+║ Batches ║       50 ║         13 ║
+╚═════════╩══════════╩════════════╝
+
+                                        Batch 1
+╭────────────────┬────────────────────────┬───────────────┬────────┬───────────────────╮
+│ Tensor         │ Shape                  │ Dtype         │ Device │ Range             │
+├────────────────┼────────────────────────┼───────────────┼────────┼───────────────────┤
+│ ECG Data       │ torch.Size([8, 30000]) │ torch.float32 │ cpu    │ [-1.0000, 1.0000] │
+│ Attention Mask │ torch.Size([8, 30000]) │ torch.int64   │ cpu    │ [1, 1]            │
+│ Labels         │ torch.Size([8, 14])    │ torch.float32 │ cpu    │ [0.0000, 1.0000]  │
+╰────────────────┴────────────────────────┴───────────────┴────────┴───────────────────╯
+"""

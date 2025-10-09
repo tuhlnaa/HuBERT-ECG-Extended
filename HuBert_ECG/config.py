@@ -150,6 +150,7 @@ def create_parser():
     required.add_argument("train_iteration", type=int, choices=[1, 2, 3], help="Hubert training iteration in {1, 2, 3}")
     required.add_argument("path_to_dataset_csv_train", type=str, help="Path to the csv file containing the training dataset")
     required.add_argument("path_to_dataset_csv_val", type=str, help="Path to the csv file containing the validation dataset")
+    required.add_argument("ecg_dir", type=str, help="Directory containing ECG data files",)
     required.add_argument("vocab_size", type=int, help="Vocabulary size, i.e. num of labels/clusters")
     required.add_argument("patience", type=int, help="Patience for early stopping")
     required.add_argument("batch_size", type=int, help="Batch size")
