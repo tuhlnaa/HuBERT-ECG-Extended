@@ -18,6 +18,7 @@ from transformers import get_linear_schedule_with_warmup
 
 # Import custom modules
 # from trainer import Trainer
+from logging_utils import ClearMLLogger
 from validator import Validator
 from metricsV2 import FinetuneMetrics
 from config import create_parser, init_seeds
@@ -35,7 +36,6 @@ logger = logging.getLogger(__name__)
 
 EPS = 1e-9
 MINIMAL_IMPROVEMENT = 1e-3
-SUPERVISED_MODEL_CKPT_PATH = "./models/checkpoints/supervised/"
 DROPOUT_ADJUSTMENT = 0.05
 WEIGHT_DECAY_MULTIPLIER = 5.0
 
@@ -127,7 +127,7 @@ class CheckpointManager:
     """Handles model checkpointing."""
     
     def __init__(self, save_dir: Path):
-        self.save_dir = Path(save_dir)
+        self.save_dir = Path(f"{save_dir}/checkpoints")
         self.save_dir.mkdir(parents=True, exist_ok=True)
     
     def save(
@@ -165,10 +165,25 @@ class CheckpointManager:
     
 
 def finetune(args):
+
+    clearml_config = {
+        'project': "HuBERT-ECG",  # ClearML project name
+        'task_name': "HuBERT-ECG finetune",  
+        'task_type': "training",  # ClearML task type
+        'reuse_last_task_id': False,  # ClearML task ID to resume or boolean flag
+        "tags": [args.task],  # List of tags for ClearML task
+    }
+
+    # ClearML uses 1337 as the default initial seed
+    clearml_logger = ClearMLLogger(args.output_dir, **clearml_config)
+
+    # Upload args as JSON
+    clearml_logger.log_args_as_json(args)
+
     init_seeds()
 
     # Initialize checkpoint manager
-    checkpoint_manager = CheckpointManager(SUPERVISED_MODEL_CKPT_PATH)
+    checkpoint_manager = CheckpointManager(args.output_dir)
 
     device = torch.device('cuda')
     
@@ -456,6 +471,7 @@ def finetune(args):
     pass
     # Ignore the previous code
 
+
     scaler = torch.amp.GradScaler('cuda') 
 
     epochs = args.training_steps // (len(train_loader) // accumulation_steps) + 1 if args.training_steps is not None else args.epochs
@@ -535,7 +551,7 @@ def finetune(args):
             if global_step % args.val_interval == 0:
                 # Run validation using the Validator
                 results = validator.validate()
-                
+
                 # Extract metrics
                 val_loss = results['val_loss']
                 target_score = results['target_score']
@@ -545,11 +561,16 @@ def finetune(args):
                 
                 # Log metrics to wandb
                 wandb.log({"Train_loss": train_loss, "val_loss": val_loss}, step=global_step)
-                
+
                 for metric_name, metric_value in results.items():
                     if metric_name != 'target_score' and '_macro' in metric_name:
                         wandb.log({metric_name: metric_value}, step=global_step)
+
+                results.update({"Train_loss": train_loss, 
+                                "learning_rate": optimizer.param_groups[0]['lr']})
                 
+                clearml_logger.log_metrics(results, global_step)
+
                 hubert.train()
                 
                 ### save if there's improvement in loss or target metric ###

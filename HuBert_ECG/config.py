@@ -169,6 +169,8 @@ def create_parser():
     init_group.add_argument("--random_init", action="store_true", help="Whether to initialize the model with random weights")
     
     # General optional arguments
+    parser.add_argument('--experiment_name', type=str, default="finetune", help='Name for the experiment')
+    parser.add_argument('--output_dir', type=str, default="./output", help='Path to save model and results')
     parser.add_argument("--sweep_dir", type=str, default=".", help="Sweep directory. Default `.`")
     parser.add_argument("--ramp_up_perc", type=float, default=0.08, help="Percentage of training steps for the ramp up phase. Default 0.08")
     parser.add_argument("--val_interval", type=int, help="Training steps to wait before validation. Required if training_steps is used")
