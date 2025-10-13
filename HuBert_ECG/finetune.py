@@ -16,16 +16,9 @@ from tqdm import tqdm
 from transformers import HubertConfig
 from transformers import get_linear_schedule_with_warmup
 
-from torcheval.metrics import MultilabelAUPRC as AUPRC
-from torchmetrics.classification import MulticlassAUROC
-from torchmetrics.classification import MultilabelAUROC
-from torchmetrics.classification import MulticlassAccuracy as Accuracy
-from torchmetrics.classification import MultilabelF1Score as F1_score
-from torchmetrics.classification import MultilabelPrecision as Precision
-from torchmetrics.classification import MultilabelRecall as Recall
-from torchmetrics.classification import MultilabelSpecificity as Specificity
-
 # Import custom modules
+from trainer import Trainer
+from validator import Validator
 from metricsV2 import FinetuneMetrics
 from config import create_parser, init_seeds
 from dataset import ECGDataset
@@ -463,6 +456,8 @@ def finetune(args):
     pass
     # Ignore the previous code
 
+
+    
     scaler = torch.amp.GradScaler('cuda') 
 
     epochs = args.training_steps // (len(train_loader) // accumulation_steps) + 1 if args.training_steps is not None else args.epochs
@@ -475,6 +470,16 @@ def finetune(args):
         num_labels=args.vocab_size,
         split='val'
     ).to(device)
+
+    # Initialize validator
+    validator = Validator(
+        model=hubert,
+        val_loader=val_loader,
+        criterion=criterion_val,
+        metrics=val_metrics,
+        device=device,
+        target_metric=args.target_metric
+    )
     
     # Validate that target metric is available
     if args.target_metric not in val_metrics.metrics.keys():
@@ -537,8 +542,6 @@ def finetune(args):
         
                 # Reset metrics for new validation cycle
                 val_metrics.reset()
-
-                logger.info("Start validation at step {}".format(global_step))
                 
                 ### validation loop ###
                 for ecg, _, labels in tqdm(val_loader, total=len(val_loader)):
@@ -572,10 +575,6 @@ def finetune(args):
                     if '_macro' in metric_name or metric_name == 'val_loss':
                         wandb.log({metric_name: metric_value}, step=global_step)
                 
-                logger.info(f"Validation loss = {val_loss}")
-                logger.info(f"Validation {args.target_metric} (macro) = {target_score:.4f}")
-
-
                 hubert.train()
                 
                 ### save if there's improvement in loss or target metric ###

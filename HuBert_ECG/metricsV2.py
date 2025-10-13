@@ -59,6 +59,14 @@ class FinetuneMetrics(nn.Module):
         return task2metric[self.task]
 
 
+    def to(self, device):
+        """Move all metrics to the specified device."""
+        super().to(device)
+        for metric in self.metrics.values():
+            metric.to(device)
+        return self
+    
+
     def reset(self):
         """Reset all accumulated states for a new computation cycle."""
         self.loss_sum = 0.0
@@ -67,14 +75,6 @@ class FinetuneMetrics(nn.Module):
         # Reset all metrics
         for metric in self.metrics.values():
             metric.reset()
-
-
-    def to(self, device):
-        """Move all metrics to the specified device."""
-        super().to(device)
-        for metric in self.metrics.values():
-            metric.to(device)
-        return self
 
 
     def update(self, logits: torch.Tensor, labels: torch.Tensor, loss: Optional[torch.Tensor] = None) -> None:
