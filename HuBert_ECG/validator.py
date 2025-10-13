@@ -35,6 +35,7 @@ class Validator:
                 ecg = ecg.to(self.device)
                 labels = labels.squeeze().to(self.device)
                 
+                # Forward pass
                 logits, _ = self.model(
                     ecg, 
                     attention_mask=None, 
@@ -42,9 +43,9 @@ class Validator:
                     output_hidden_states=False, 
                     return_dict=False
                 )
+                # Compute loss
                 loss = self.criterion(logits, labels)
                 
-                # Update metrics with batch data
                 self.metrics.update(logits, labels, loss)
         
         # Compute all metrics

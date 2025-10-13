@@ -17,7 +17,7 @@ from transformers import HubertConfig
 from transformers import get_linear_schedule_with_warmup
 
 # Import custom modules
-from trainer import Trainer
+# from trainer import Trainer
 from validator import Validator
 from metricsV2 import FinetuneMetrics
 from config import create_parser, init_seeds
@@ -456,8 +456,6 @@ def finetune(args):
     pass
     # Ignore the previous code
 
-
-    
     scaler = torch.amp.GradScaler('cuda') 
 
     epochs = args.training_steps // (len(train_loader) // accumulation_steps) + 1 if args.training_steps is not None else args.epochs
@@ -488,12 +486,9 @@ def finetune(args):
     for epoch in range(start_epoch, epochs):
     
         hubert.train()
-        
-        logger.info(f"Epoch {epoch+1}/{epochs}")
-        
         train_losses = []
         
-        for ecg, attention_mask, labels in tqdm(train_loader, total=len(train_loader)):
+        for ecg, attention_mask, labels in tqdm(train_loader, total=len(train_loader), desc=f"Epoch {epoch+1}/{epochs}"):
             
             global_step += 1
             
@@ -538,41 +533,21 @@ def finetune(args):
             
             ### validation ###        
             if global_step % args.val_interval == 0:
-                hubert.eval()
-        
-                # Reset metrics for new validation cycle
-                val_metrics.reset()
+                # Run validation using the Validator
+                results = validator.validate()
                 
-                ### validation loop ###
-                for ecg, _, labels in tqdm(val_loader, total=len(val_loader)):
-                    
-                    ecg = ecg.to(device)
-                    labels = labels.squeeze().to(device)
-                    
-                    with torch.no_grad():
-                        logits, _ = hubert(ecg, attention_mask=None, output_attentions=False, output_hidden_states=False, return_dict=False)
-                        loss = criterion_val(logits, labels)
-                    
-                    # Update metrics with batch data
-                    val_metrics.update(logits, labels, loss)
-
-                # Compute all metrics
-                metrics_dict = val_metrics.compute()
-                
-                # Extract key values
-                val_loss = metrics_dict['val_loss']
+                # Extract metrics
+                val_loss = results['val_loss']
+                target_score = results['target_score']
                 
                 train_loss = np.mean(train_losses)
                 train_losses.clear()  # to keep train loss aligned with val loss
                 
-                # Get target metric score
-                target_score = val_metrics.get_target_metric(args.target_metric)
-                
                 # Log metrics to wandb
-                wandb.log({"Training_loss": train_loss, "Validation_loss": val_loss}, step=global_step)
+                wandb.log({"Train_loss": train_loss, "val_loss": val_loss}, step=global_step)
                 
-                for metric_name, metric_value in metrics_dict.items():
-                    if '_macro' in metric_name or metric_name == 'val_loss':
+                for metric_name, metric_value in results.items():
+                    if metric_name != 'target_score' and '_macro' in metric_name:
                         wandb.log({metric_name: metric_value}, step=global_step)
                 
                 hubert.train()

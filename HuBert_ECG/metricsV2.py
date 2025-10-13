@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 
+from rich.console import Console
+from rich.table import Table
 from typing import Dict, Optional
 from torcheval.metrics import MultilabelAUPRC
 from torchmetrics.classification import (
@@ -12,6 +14,20 @@ from torchmetrics.classification import (
     MultilabelRecall,
     MultilabelSpecificity,
 )
+
+
+def check_label_distribution(labels):
+    """
+    Check which labels appear in the dataset.
+    
+    Args:
+        labels: Tensor of shape (num_samples, num_labels) for multilabel classification
+                Each row is one sample, each column is one label (0 or 1)
+    """
+    # Sum along the sample dimension (dim=0) to count positives for each label
+    label_counts = labels.sum(dim=0)
+    print(f"Label distribution (# of positive samples per label): {label_counts}")
+    print(f"Missing labels (count=0): {(label_counts == 0).nonzero().squeeze()}")
 
 
 class FinetuneMetrics(nn.Module):
@@ -78,14 +94,7 @@ class FinetuneMetrics(nn.Module):
 
 
     def update(self, logits: torch.Tensor, labels: torch.Tensor, loss: Optional[torch.Tensor] = None) -> None:
-        """
-        Update states with predictions and targets from a new batch.
-        
-        Args:
-            logits: Model output logits
-            labels: Ground truth labels
-            loss: Loss value for the batch
-        """
+        """Update states with predictions and targets from a new batch."""
         # Update loss tracking if provided
         if loss is not None:
             self.loss_sum += loss.item()
@@ -138,15 +147,8 @@ class FinetuneMetrics(nn.Module):
                 # For scalar metrics (like accuracy)
                 results[f"{self.split}_{name}"] = float(score)
         
-        # Print metrics summary
-        metric_summary = f"{self.split.capitalize()} metrics - Loss: {mean_loss:.4f}"
-        for name in self.metrics.keys():
-            if f"{self.split}_{name}_macro" in results:
-                metric_summary += f", {name}: {results[f'{self.split}_{name}_macro']:.4f}"
-            elif f"{self.split}_{name}" in results:
-                metric_summary += f", {name}: {results[f'{self.split}_{name}']:.4f}"
-        
-        print(metric_summary)
+        # Print metrics using rich table
+        self.print_metrics_table(results)
         
         return results
 
@@ -171,3 +173,35 @@ class FinetuneMetrics(nn.Module):
             return valid_scores.mean().item() if len(valid_scores) > 0 else 0.0
         else:
             return float(score)
+
+
+    def print_metrics_table(self, results: Dict[str, float]) -> None:
+        """
+        Print metrics in a formatted table using the rich library.
+        
+        Args:
+            results: Dictionary containing computed metrics
+        """
+        console = Console()
+        
+        # Create table with title
+        table = Table(title=f"{self.split.capitalize()} Metrics", show_header=True, header_style="bold magenta")
+        table.add_column("Metric", style="cyan", no_wrap=True)
+        table.add_column("Value", justify="right", style="green")
+        
+        # Add loss first
+        loss_key = f"{self.split}_loss"
+        if loss_key in results:
+            table.add_row("Loss", f"{results[loss_key]:.4f}")
+        
+        # Add macro averages for each metric
+        for name in self.metrics.keys():
+            macro_key = f"{self.split}_{name}_macro"
+            scalar_key = f"{self.split}_{name}"
+            
+            if macro_key in results:
+                table.add_row(f"{name.capitalize()} (macro)", f"{results[macro_key]:.4f}")
+            elif scalar_key in results:
+                table.add_row(name.capitalize(), f"{results[scalar_key]:.4f}")
+        
+        console.print(table)
