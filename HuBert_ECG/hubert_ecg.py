@@ -127,14 +127,17 @@ class HuBERTECG(HubertModel):
 
         if not return_dict:
             if mask_time_indices is None:
-                return (hidden_states,) + encoder_outputs[1:]
-            
-            return (hidden_states,) + encoder_outputs[1:] + mask_time_indices
+                return (hidden_states, ) + encoder_outputs[1:]
+            else:
+                return (hidden_states,) + encoder_outputs[1:] + mask_time_indices
             
         final_dict = BaseModelOutput(
             last_hidden_state=hidden_states,
             hidden_states=encoder_outputs.hidden_states,
             attentions=encoder_outputs.attentions,
         )
-        final_dict["mask_time_indices"] = mask_time_indices
+        
+        if mask_time_indices is not None:
+            final_dict["mask_time_indices"] = mask_time_indices
+            
         return final_dict
