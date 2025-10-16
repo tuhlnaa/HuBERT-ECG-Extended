@@ -22,53 +22,9 @@ PROJECT_ROOT = Path(__file__).parents[1]
 sys.path.append(str(PROJECT_ROOT))
 
 from HuBert_ECG.config import RichPrinter, init_seeds
-from HuBert_ECG.dataset import ECGDataset
+from HuBert_ECG.dataset import create_dataloader
 
 console = Console()
-
-
-def create_dataloader(
-    csv_path: str,
-    ecg_dir: str,
-    batch_size: int,
-    label_start_idx: int = 3,
-    downsample_factor: int = None,
-    random_crop: bool = False,
-    shuffle: bool = True,
-    is_pretrain: bool = False,
-) -> DataLoader:
-    """Create a DataLoader for ECG dataset.
-    
-    Args:
-        csv_path: Path to dataset CSV file
-        ecg_dir: Directory containing ECG data
-        batch_size: Batch size for DataLoader
-        label_start_idx: Starting index of labels in CSV
-        downsample_factor: Factor for downsampling ECG signals
-        random_crop: Whether to apply random 5s crop augmentation
-        shuffle: Whether to shuffle data
-        is_pretrain: Whether this is for pretraining mode
-        
-    Returns:
-        Configured DataLoader instance
-    """
-    dataset = ECGDataset(
-        path_to_dataset_csv=csv_path,
-        ecg_dir_path=ecg_dir,
-        label_start_index=label_start_idx,
-        downsampling_factor=downsample_factor,
-        pretrain=is_pretrain,
-        random_crop=random_crop,
-    )
-    
-    return DataLoader(
-        dataset,
-        collate_fn=dataset.collate,
-        batch_size=batch_size,
-        shuffle=shuffle,
-        pin_memory=True,
-        drop_last=True,
-    )
 
 
 def print_batch_info(

@@ -1,23 +1,28 @@
-import torch
-import torch.nn as nn
-from torch.nn import functional as F
-import torch.cuda.amp as amp
-from torch.utils.data import DataLoader
-from loguru import logger
 import argparse
-from tqdm import tqdm
-from hubert_ecg import HuBERTECG as HuBERT, HuBERTECGConfig
-from transformers import get_linear_schedule_with_warmup
-import torch.optim as optim
-import wandb
-import numpy as np
 import copy
-from math import ceil
-from dataset import ECGDataset
 import os
 import random
-from transformers.models.hubert.modeling_hubert import compute_mask_indices
+import torch
+import wandb
+
+import numpy as np
+import torch.cuda.amp as amp
+import torch.nn as nn
+import torch.optim as optim
+
+from loguru import logger
+from math import ceil
+from torch.utils.data import DataLoader
+from tqdm import tqdm
 from transformers import HubertConfig
+from transformers import get_linear_schedule_with_warmup
+from transformers.models.hubert.modeling_hubert import compute_mask_indices
+
+from torch.nn import functional as F
+
+from dataset import ECGDataset
+from config import RichPrinter
+from hubert_ecg import HuBERTECG as HuBERT, HuBERTECGConfig
 
 EPS = 1E-09
 MINIMAL_IMPROVEMENT = 1e-3
@@ -483,198 +488,59 @@ def train(args):
 
 
 if __name__ == "__main__":
-    
-    ### NOTE: comment for sweeps, uncomment for normal run ###
-
+    """Create and configure argument parser."""
     parser = argparse.ArgumentParser(description="Train Hubert-ECG")
+    
+    # Required arguments
+    required = parser.add_argument_group('required arguments')
+    required.add_argument("train_iteration", type=int, choices=[1, 2, 3], help="Hubert training iteration in {1, 2, 3}")
+    required.add_argument("path_to_dataset_csv_train", type=str, help="Path to the csv file containing the training dataset")
+    required.add_argument("path_to_dataset_csv_val", type=str, help="Path to the csv file containing the validation dataset")
+    required.add_argument("batch_size", type=int, help="Batch size")
+    required.add_argument("patience", type=int, help="Patience for early stopping")
 
-    #train_iteration
-    parser.add_argument(
-        "train_iteration",
-        help="Hubert training iteration in {1, 2, 3}", 
-        type=int,
-        choices=[1, 2, 3]
-    )
-    
-    #path_to_dataset_csv_train
-    parser.add_argument(
-        "path_to_dataset_csv_train",
-        help="Path to the csv file containing the training dataset",
-        type=str
-    )
-    
-    #path_to_dataset_csv_val
-    parser.add_argument(
-        "path_to_dataset_csv_val",
-        help="Path to the csv file containing the validation dataset",
-        type=str
-    )
-    
-    #training_steps
-    parser.add_argument(
-        "--training_steps",
-        help="[OPT.] Number of training steps to perform",
-        type=int,
-    )
-    
-    #epochs
-    parser.add_argument(
-        "--epochs",
-        help="[OPT] Number of epochs to perform",
-        type=int,
-    )
-    
-    #val_interval
-    parser.add_argument(
-        "val_interval",
-        help="Number of training steps to wait before validating the model",
-        type=int
-    )
-    
-    #mask_time_prob
-    parser.add_argument(
-        "mask_time_prob",
-        help="Probability of masking a time step in the input sequence",
-        type=float
-    )
-    
-    #batch_size
-    parser.add_argument(
-        "batch_size",
-        help="Batch_size",
-        type=int
-    )
-    
-    #largeness
-    parser.add_argument(
-        "largeness",
-        help="Model largeness in {base, large, x-large}",
-        type=str,
-        choices=["base", "large", "small"]
-    )
-    
-    #alpha
-    parser.add_argument(
-        "alpha",
-        help="[OPT] Alpha weight in the pretraining loss function",
-        type=float
-    )
-    
-    #kmeans_path
-    parser.add_argument(
-        "kmeans_path",
-        help="Path to a file that contains paths to KMeans models ",
-        type=str
-    )
-    
-    #train_features_path
-    parser.add_argument(
-        "train_features_path",
-        help="In case of pretraining or resumed pretraing, the path from which training features to cluster can be loaded",
-        type=str,
-    )
-    
-    #val_features_path
-    parser.add_argument(
-        "val_features_path",
-        help="In case of pretraining or resumed pretraing, the path from which validation features to cluster can be loaded",
-        type=str,
-    )
-    
-    #vocab_sizes
-    parser.add_argument(
-        "vocab_sizes",
-        help="Vocabulary sizes, i.e. num of labels/clusters per each task/clustering model",
-        type=int,
-        nargs="+"
-    )
-    
-    #patience
-    parser.add_argument(
-        "--patience",
-        help="Patience for early stopping",
-        type=int
-    )
-    
-    #intervals_for_penalty
-    parser.add_argument(
-        "--intervals_for_penalty",
-        help="Number of validation intervals with worsening performance to wait before penalizing model with regularization. Default 4",
-        type=int,
-        default=4
-    )
-    
-    #resume_pretraining
-    parser.add_argument(
-        "--resume_pretraining",
-        help="Whether to resume pretraing",
-        action="store_true"
-    )
-    
-    #accumulation_steps
-    parser.add_argument(
-        "--accumulation_steps", 
-        help="[OPT] Number of batch gradients to accumulate before updating model params. Default 1",
-        type=int,
-        default=1
-    )
-    
-    #downsampling_factor
-    parser.add_argument(
-        "--downsampling_factor",
-        help="[OPT.] Integer indicating the downsampling factor of the ECG signal. Default None",
-        type=int
-    )
+    # Pretraining-specific required arguments
+    required.add_argument("mask_time_prob", type=float, help="Probability of masking a time step in the input sequence")
+    required.add_argument("alpha", type=float, help="Alpha weight in the pretraining loss function")
+    required.add_argument("kmeans_path", type=str, help="Path to a file that contains paths to KMeans models")
+    required.add_argument("train_features_path", type=str, help="In case of pretraining or resumed pretraining, the path from which training features to cluster can be loaded")
+    required.add_argument("val_features_path", type=str, help="In case of pretraining or resumed pretraining, the path from which validation features to cluster can be loaded")
+    required.add_argument("vocab_sizes", type=int, nargs="+", help="Vocabulary sizes, i.e. num of labels/clusters per each task/clustering model")
 
-    #lr
-    parser.add_argument(
-        "--lr",
-        help="[OPT] Learning rate. Default 5e-5",
-        type=float,
-        default=5e-5
-    )
-    
-    #load_path
-    parser.add_argument(
-        "--load_path",
-        help="[OPT] Path to a partially pretrained model in order to resume pretraining",
-        type=str
-    )
-    
-    #dynamic-reg
-    parser.add_argument(
-        "--dynamic_reg",
-        help="[OPT] Whether to use dynamic regularization",
-        action="store_true"
-    )
-    
-    # weight_decay_mult
-    parser.add_argument(
-        "--weight_decay_mult",
-        help="Weight decay. Default 0",
-        type=int,
-        default=1
-    )
-    
-    # model_dropout_mult
-    parser.add_argument(
-        "--model_dropout_mult",
-        help="Model dropout. Default 0",
-        type=int,
-        default=0
-    )
+    # Training schedule (mutually exclusive)
+    schedule = parser.add_mutually_exclusive_group(required=True)
+    schedule.add_argument("--training_steps", type=int, help="Number of training steps to perform")
+    schedule.add_argument("--epochs", type=int, help="Number of epochs to perform")
 
-    # wandb_run_name
-    parser.add_argument(
-        "--wandb_run_name",
-        help="OPT. Wandb run name. Default none",
-        type=str,
-        default=None
-    ) 
-     
+    # Model initialization (mutually exclusive)
+    init_group = parser.add_mutually_exclusive_group()
+    init_group.add_argument("--resume_pretraining", action="store_true", help="Whether to resume pretraining")
 
-        
+    # General optional arguments
+    parser.add_argument("--accumulation_steps", type=int, default=1, help="Number of batch gradients to accumulate before updating model params")
+    parser.add_argument("--val_interval", type=int, help="Training steps to wait before validation. Required if training_steps is used")
+    parser.add_argument("--downsampling_factor", type=int, help="Downsampling factor to apply to the ECG signal")
+
+    # Model architecture
+    parser.add_argument("--load_path", type=str, help="Path to a model checkpoint to load for starting/resuming fine-tuning")
+    parser.add_argument("--largeness", type=str, choices=["small", "base", "large"], help="Model largeness in case of random initialization")
+
+    # Optimization
+    parser.add_argument("--lr", type=float, default=5e-5, help="Learning rate")
+    parser.add_argument("--weight_decay_mult", type=float, default=1.0, help="Weight decay multiplier. Default 1.0 (i.e. WD=0.01)")
+    parser.add_argument("--model_dropout_mult", type=float, default=0.0, help="Model dropout multiplier. Default 0.0 (i.e. dropout=0.1)")
+
+    # Regularization
+    parser.add_argument("--dynamic_reg", action="store_true", help="Whether to apply dynamic regularization to the model")
+    parser.add_argument("--intervals_for_penalty", type=int, default=4, help="Number of validation intervals with worsening performance before applying regularization")
+
+    # Logging
+    parser.add_argument("--wandb_run_name", type=str, help="The name to give to this run")
+
     args = parser.parse_args()
+
+    # Print configuration
+    RichPrinter.print_config(args, "Configuration")
     
     if not torch.cuda.is_available():
         logger.error("CUDA not available. CPU training not supported")
@@ -715,19 +581,5 @@ if __name__ == "__main__":
 
     if args.accumulation_steps is not None and args.training_steps is not None and args.training_steps % args.accumulation_steps != 0:
         raise ValueError("Argument training_steps must be divisible by argument accumulation_steps")
-    
-    
-
-    
-    print("Inserted arguments: ")
-    for arg in vars(args):
-        print(f"{arg} = {getattr(args, arg)}")
-    
-    
-    ### NOTE: this is to test sweeps ###
-
-    # wandb.init(entity="cardi-ai", project="ECG-pretraining", group=("self-supervised"))
-    
-    # args = wandb.config
 
     train(args)

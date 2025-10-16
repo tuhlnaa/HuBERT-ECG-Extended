@@ -9,6 +9,7 @@ import joblib
 from torch.utils.data import Dataset
 import neurokit2 as nk
 from scipy import signal
+from torch.utils.data import DataLoader
 
 SAMPLES_IN_5_SECONDS_AT_500HZ = 2500
 SAMPLES_IN_10_SECONDS_AT_500HZ = 5000
@@ -22,6 +23,57 @@ logging.basicConfig(
     handlers=[RichHandler()]
 )
 logger = logging.getLogger(__name__)
+
+
+def create_dataloader(
+    csv_path: str,
+    ecg_dir: str,
+    batch_size: int,
+    label_start_idx: int = 3,
+    downsample_factor: int = None,
+    random_crop: bool = False,
+    shuffle: bool = True,
+    is_pretrain: bool = False,
+) -> DataLoader:
+    """Create a DataLoader for ECG dataset.
+    
+    Args:
+        csv_path: Path to dataset CSV file
+        ecg_dir: Directory containing ECG data
+        batch_size: Batch size for DataLoader
+        label_start_idx: Starting index of labels in CSV
+        downsample_factor: Factor for downsampling ECG signals
+        random_crop: Whether to apply random 5s crop augmentation
+        shuffle: Whether to shuffle data
+        is_pretrain: Whether this is for pretraining mode
+
+    Returns:
+        Configured DataLoader instance
+    """
+    dataset = ECGDataset(
+        path_to_dataset_csv=csv_path,
+        ecg_dir_path=ecg_dir,
+        label_start_index=label_start_idx,
+        downsampling_factor=downsample_factor,
+        pretrain=is_pretrain,
+        random_crop=random_crop,
+    )
+
+    if len(dataset) == 0:
+        raise ValueError(f"Dataset is empty! No images found. Please check the paths and file formats.")
+    
+    data_loader = DataLoader(
+        dataset,
+        collate_fn=dataset.collate,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        pin_memory=True,
+        drop_last=True,
+    )
+    print(f"Dataset samples: {len(dataset)}, DataLoader batches: {len(data_loader)}")
+
+    return data_loader
+
 
 class ECGDataset(Dataset):
     def __init__(
