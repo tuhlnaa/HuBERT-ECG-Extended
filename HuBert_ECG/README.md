@@ -14,7 +14,8 @@ While the `ECGDataset` can be tasked with downsampling (see the `downsampling_fa
 
 ## Clustering
 After dumping ECG feature descriptors, one can proceed with the offline clustering step, that is, clustering the feature descriptor and fit a K-means clustering model. 
-`clustering.py` implements such a step, saves the resulting model, which is necessary to produce labels to use in the pre-training, and provides evaluation functions to quantify the clustering quality
+`clusteri.py` implements such a step, saves the resulting model, which is necessary to produce labels to use in the pre-training, and provides evaluation functions to quantify the clustering quality. 
+The `clustering.sh` script help understand how to start this operation.
 
 ## Dataset
 The `dataset.py` file contains the ECGDataset implementation, responsible of iterating over a csv file representing an ECG dataset (normally train/val/test sets) and provinding the data loader with ECGs, ECG feature descriptors, and ECG up/downstream labels.
@@ -24,7 +25,7 @@ The architecture of HuBERT-ECG one sees during pre-training is provided in the `
 The difference consists in projection & look-up embedding matrices present in the former architecture that are replaced by the classification head present in the latter one.
 
 ## Pre-training
-`pretrain.py` contains the code to pre-train HuBERT-ECG in a self-supervised manner. `python pretrain.py --help` is highly suggested.
+`pretrain.py` contains the code to pre-train HuBERT-ECG in a self-supervised manner. `python pretrain.py --help` is highly suggested. In addition, `pretraining.sh` is also helpful.
 
 ## Fine-tuning
 `finetune.py` contains the code to fine-tune and train from scratch HuBERT-ECG in a supervised manner. `python finetune.py --help` is highly suggested as well as a look at `finetune.sh`
