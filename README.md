@@ -15,15 +15,6 @@ Deep learning models have shown remarkable performance in electrocardiogram (ECG
 
 <br>
 
-## News
-- [06/2025] A new medrxiv version has been updated with new results, findings and insights!
-- [12/2024] Reproducibility has never been easier! Training, validation, and test splits ready to use in the reproducibility folder!
-- [12/2024] Pre-trained models are easily downloadable from Hugging Face using `AutoModel.from_pretrained`
-- [11/2024] Pre-trained models are freely available on HuggingFace
-- [11/2024] This repository has been made public!
-
-<br>
-
 ## 🚀 Quick Start
 
 ```bash
@@ -53,6 +44,15 @@ Thw forward pass on a single instance takes less than 1 second on an A100 GPU no
 The splits were used in cross-validation experiments/evaluations to also mitigate the performance difference that can be be observed when using different hardware and machiens.
 
 **Remember to pre-process your data before feeding HuBERT-ECG. Take a look at Data and Preprocessing section in the paper**
+
+<br>
+
+## News
+- [06/2025] A new medrxiv version has been updated with new results, findings and insights!
+- [12/2024] Reproducibility has never been easier! Training, validation, and test splits ready to use in the reproducibility folder!
+- [12/2024] Pre-trained models are easily downloadable from Hugging Face using `AutoModel.from_pretrained`
+- [11/2024] Pre-trained models are freely available on HuggingFace
+- [11/2024] This repository has been made public!
 
 <br>
 
