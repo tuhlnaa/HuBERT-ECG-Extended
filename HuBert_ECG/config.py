@@ -141,7 +141,7 @@ class RichPrinter:
         print()  # Add spacing after table
 
 
-def create_parser():
+def create_training_parser():
     """Create and configure argument parser."""
     parser = argparse.ArgumentParser(description="Train Hubert-ECG")
     
@@ -214,12 +214,12 @@ def create_parser():
     RichPrinter.print_config(args, "Configuration")
 
     # Validate arguments
-    validate_args(args)
+    validate_training_args(args)
 
     return args
 
 
-def validate_args(args):
+def validate_training_args(args):
     """Validate argument combinations and constraints."""
     errors = []
     

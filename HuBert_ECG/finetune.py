@@ -20,7 +20,7 @@ from transformers import get_linear_schedule_with_warmup
 from validator import Validator
 from logging_utils import ClearMLLogger
 from metricsV2 import FinetuneMetrics
-from config import create_parser, init_seeds
+from config import create_training_parser, init_seeds
 from dataset import create_dataloader
 from hubert_ecg import HuBERTECG as HuBERT, HuBERTECGConfig
 from hubert_ecg_classification import HuBERTForECGClassification as HuBERTClassification
@@ -576,7 +576,7 @@ def finetune(args):
 
 
 if __name__ == "__main__":
-    args = create_parser()
+    args = create_training_parser()
 
     # Start training
     finetune(args)
