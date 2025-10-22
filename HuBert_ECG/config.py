@@ -4,20 +4,20 @@ Based on: https://github.com/huggingface/pytorch-image-models/blob/main/train.py
 """
 import argparse
 import json
-import torch
-import random
 import logging
+import os
+import random
+import torch
 import numpy as np
 
-from torch.backends import cudnn
-from typing import Any, Dict, Union
-from pathlib import Path
-from rich.table import Table
-from rich import box, print
-from rich.pretty import Pretty
-from rich.logging import RichHandler
 from omegaconf import OmegaConf
-
+from pathlib import Path
+from rich.logging import RichHandler
+from rich.pretty import Pretty
+from rich.table import Table
+from torch.backends import cudnn
+from rich import box, print
+from typing import Any, Dict, Union
 
 # Configure logging
 logging.basicConfig(
@@ -265,6 +265,107 @@ def validate_training_args(args):
     # Warnings
     if args.random_init and args.load_path is not None:
         logger.warning("random_init is provided. load_path will be ignored")
+    
+    # Raise all errors at once
+    if errors:
+        raise ValueError("Argument validation failed:\n" + "\n".join(f"  - {e}" for e in errors))
+
+
+def create_dumping_parser():
+    """Create and configure argument parser for feature dumping."""
+    parser = argparse.ArgumentParser(description="Dump features for Hubert-ECG training")
+    
+    # Required arguments
+    required = parser.add_argument_group('required arguments')
+    required.add_argument("train_iteration", type=int, choices=[1, 2, 3], 
+                          help="Training iteration to consider for dumping features. If 1, dump morphological features. If 2+, dump Hubert hidden features")
+    required.add_argument("dataframe_path", type=str, help="Path to the dataframe object in csv format")
+    required.add_argument("in_dir", type=str, help="Input directory where real files (those pointed by dataframe object) are")
+    required.add_argument("dest_dir", type=str, help="Directory where to dump extracted features")
+    
+    # Percentage range arguments
+    parser.add_argument("start_perc",type=float, default=0.0, help="Min percentage of the dataframe to dump features from. Used only when train_iteration = 1")
+    parser.add_argument("end_perc", type=float, default=1.0, help="Max percentage of the dataframe to dump features from. Used only when train_iteration = 1")
+    
+    # Feature type selection (mutually exclusive)
+    feature_type = parser.add_mutually_exclusive_group()
+    feature_type.add_argument("--mfcc_only", action="store_true", help="If True, dump only MFCC features and derivatives. Used only when train_iteration = 1")
+    feature_type.add_argument("--time_freq", action="store_true", help="If True, dump only time and frequency features. Used only when train_iteration = 1")
+
+    # Model and processing arguments
+    parser.add_argument("--hubert_path", type=str, help="Path to the Hubert model to use for extracting latent features. Used only with train_iteration > 1")
+    parser.add_argument("--samp_rate", type=int, help="Sampling rate of the ECG signal from which features are extracted. Used only when train_iteration = 1 and when MFCC features are computed")
+    parser.add_argument("--batch_size", type=int,default=1, help="Batch size to use when dumping latent features. Used only when train_iteration > 1")
+    parser.add_argument("--output_layer", type=int, help="Output layer of HuBERT encoder from which to take latent features. Used only when train_iteration > 1")
+    parser.add_argument("--save_csv_for_dumped_features", action="store_true", help="Whether to save a csv file containing references to dumped features. Helpful when clustering is the next step")
+    
+    args = parser.parse_args()
+    
+    # Print configuration
+    RichPrinter.print_config(args, "Configuration")
+
+    # Validate arguments
+    validate_dumping_args(args)
+
+    return args
+
+
+def validate_dumping_args(args):
+    """Validate argument combinations and constraints."""
+    errors = []
+    
+    # Validate train_iteration range
+    if args.train_iteration < 1 or args.train_iteration > 3:
+        errors.append(f"train_iteration must be 1, 2 or 3. Got {args.train_iteration}")
+    
+    # Validate percentage ranges
+    if not (0 <= args.start_perc <= 1):
+        errors.append(f"start_perc must be in [0, 1] range. Got {args.start_perc}")
+    
+    if not (0 <= args.end_perc <= 1):
+        errors.append(f"end_perc must be in [0, 1] range. Got {args.end_perc}")
+    
+    # Validate mutually exclusive feature types
+    if args.mfcc_only and args.time_freq:
+        errors.append("mfcc_only and time_freq are mutually exclusive")
+    
+    # Validate hubert_path requirement for train_iteration > 1
+    if args.train_iteration > 1 and args.hubert_path is None:
+        errors.append("hubert_path must be specified when train_iteration is 2 or 3")
+    
+    # Validate output_layer requirement for train_iteration > 1
+    if args.train_iteration > 1 and args.output_layer is None:
+        errors.append("output_layer must be provided when train_iteration > 1")
+    
+    # Validate hubert_path file existence
+    if args.train_iteration > 1 and args.hubert_path is not None:
+        if not os.path.isfile(args.hubert_path):
+            errors.append(f"hubert_path must be a valid file path. Got {args.hubert_path}")
+    
+    # Validate samp_rate requirement for MFCC features
+    if args.train_iteration == 1:
+        needs_mfcc = args.mfcc_only or (not args.mfcc_only and not args.time_freq)
+        if needs_mfcc and args.samp_rate is None:
+            errors.append("samp_rate must be provided when dumping features that include MFCC")
+    
+    # Warnings for unnecessary arguments
+    if args.mfcc_only and args.train_iteration > 1:
+        logger.warning("mfcc_only is not needed when train_iteration is 2 or 3. Ignoring it")
+    
+    if args.train_iteration == 1 and args.hubert_path is not None:
+        logger.warning("hubert_path is not needed when train_iteration is 1. Ignoring it")
+    
+    if args.train_iteration == 1 and args.batch_size is not None:
+        logger.warning("batch_size is not needed when train_iteration is 1. Ignoring it")
+    
+    if args.train_iteration == 1 and args.output_layer is not None:
+        logger.warning("output_layer is not needed when train_iteration is 1. Ignoring it")
+    
+    if not args.mfcc_only and not args.time_freq and args.train_iteration == 1:
+        logger.warning("Neither mfcc_only nor time_freq provided. Dumping mixed features")
+    
+    if args.time_freq and args.samp_rate is not None:
+        logger.warning("samp_rate not necessary when dumping only time_freq features. Ignoring it")
     
     # Raise all errors at once
     if errors:
