@@ -12,10 +12,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from rich.logging import RichHandler
 from scipy import signal
-from scipy.fft import fft, rfft
+from scipy.fft import fft
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from typing import Optional
+from typing import Optional, Tuple
 
 # Import custom modules
 from config import create_dumping_parser, init_seeds
@@ -204,25 +204,42 @@ def _trim_lead_data(data: np.ndarray, config: SamplingConfig) -> np.ndarray:
     return np.concatenate(trimmed_leads)
 
 
-def dump_latent_features(path_to_dataset_csv, in_dir, dest_dir, start_perc, end_perc, hubert, output_layer, iteration, batch_size, save_csv):
-    '''
-    Saves on disk computed latent representation once extracted from `hubert`'s `output_layer`.
+def extract_latent_features(
+    dataset_csv_path: Path | str,
+    ecg_dir: Path | str,
+    output_dir: Path | str,
+    model: torch.nn.Module,
+    layer_idx: int,
+    batch_size: int = 32,
+    data_slice: Tuple[float, float] = (0.0, 1.0),
+    downsampling_factor: int = 5,
+    num_workers: int = 4,
+    save_metadata_csv: bool = False,
+    iteration_id: Optional[int] = None,
+) -> None:
+    """
+    Extract and save latent representations from a HuBERT model.
+    
     Args:
-    - path_to_dataset_csv: path to the csv files referencing the ECGs
-    - in_dir: where the ECGs are
-    - dest_dir: where to save the computed representations
-    - start_perc and end_perc indicate the starting and ending point of the csv file of which latents are to compute
-    Example: data_set.ecg_dataframe.iloc[int(start_perc * len(data_set)) : int(end_perc * len(data_set))+1]
-    - hubert: a hubert model used to encode raw ECG into representations
-    - output_layer: the encoding layer from which latents are to be extracted
-    - iteration: iteration id used when saving the csv file referencing the saved representations
-    - batch_size: the batch_size to use when feeding ECGs into hubert. 
-    - save_csv: whether to save a csv file referencing dumped features.
-    '''
-        
+        dataset_csv_path: Path to CSV file referencing ECG data
+        ecg_dir: Directory containing ECG files
+        output_dir: Directory to save extracted features
+        model: HuBERT model for encoding ECGs
+        layer_idx: Hidden layer index to extract features from (0-indexed)
+        batch_size: Batch size for processing
+        data_slice: Tuple of (start_fraction, end_fraction) for dataset slicing
+        downsampling_factor: Downsampling factor for ECG data
+        num_workers: Number of workers for data loading
+        save_metadata_csv: Whether to save CSV with feature references
+        iteration_id: Optional iteration identifier for metadata CSV naming
+    
+    Note:
+        Features are saved as individual .npy files per ECG sample.
+    """
+    start_perc, end_perc = data_slice
     data_set = ECGDataset(
-        path_to_dataset_csv = path_to_dataset_csv,
-        ecg_dir_path = in_dir,
+        path_to_dataset_csv = dataset_csv_path,
+        ecg_dir_path = ecg_dir,
         downsampling_factor=5,
         pretrain = False,
         encode = True
@@ -231,8 +248,8 @@ def dump_latent_features(path_to_dataset_csv, in_dir, dest_dir, start_perc, end_
     # cutting dataframe to the desired percentage
     data_set.ecg_dataframe = data_set.ecg_dataframe.iloc[int(start_perc * len(data_set)) : int(end_perc * len(data_set))+1]
 
-    if save_csv:
-        data_set.ecg_dataframe.to_csv(f"latent_{int((end_perc-start_perc)*100)}_perc_encoder_{output_layer+1}_it{iteration}.csv", index=False)
+    if save_metadata_csv:
+        data_set.ecg_dataframe.to_csv(f"latent_{int((end_perc-start_perc)*100)}_perc_encoder_{layer_idx+1}_it{iteration_id}.csv", index=False)
         logger.info("Saved csv file containing references to dumped latents")
     
     dataloader = DataLoader(
@@ -243,18 +260,18 @@ def dump_latent_features(path_to_dataset_csv, in_dir, dest_dir, start_perc, end_
         drop_last=False
     )
     
-    hubert.eval()
+    model.eval()
     
     for i, (ecgs, ecg_filenames) in enumerate(tqdm(dataloader, total=len(dataloader))):
         
-        ecgs = ecgs.to(hubert.device)
+        ecgs = ecgs.to(model.device)
         
         with torch.no_grad():
-            out_encoder = hubert(ecgs, attention_mask=None, output_attentions=False, output_hidden_states=True, return_dict=True)
+            out_encoder = model(ecgs, attention_mask=None, output_attentions=False, output_hidden_states=True, return_dict=True)
             
-        features = out_encoder['hidden_states'][output_layer]
+        features = out_encoder['hidden_states'][layer_idx]
         
-        assert features.size(1) == 93 and features.size(2) == hubert.config.hidden_size, f"{features.shape} , {ecg_filenames}"
+        assert features.size(1) == 93 and features.size(2) == model.config.hidden_size, f"{features.shape} , {ecg_filenames}"
         assert features.size(0) == len(ecg_filenames), f"{features.size(0)} != {len(ecg_filenames)}"
         
         features = features.cpu().numpy() # (B, n_tokens, D)
@@ -264,7 +281,7 @@ def dump_latent_features(path_to_dataset_csv, in_dir, dest_dir, start_perc, end_
         # block_mapping[path] = ecg_filenames
         # np.save(path[:-4], features)
         
-        ecg_paths = [os.path.join(dest_dir, ecg_filename[:-4]) for ecg_filename in ecg_filenames] # new list for every batch
+        ecg_paths = [os.path.join(output_dir, ecg_filename[:-4]) for ecg_filename in ecg_filenames] # new list for every batch
         
         with concurrent.futures.ProcessPoolExecutor() as executor:
             executor.map(np.save, ecg_paths, features)
@@ -362,7 +379,7 @@ def extract_ecg_features(
     features_array = np.array(features, dtype=np.float32)
     np.save(output_path, features_array)
     logger.info(f"Saved features to {output_path}")
-    
+
     return features_array
 
 
@@ -402,7 +419,18 @@ def main(args):
         hubert.eval()
         #dataframe.apply(dump_ecg_features_from_hubert, axis=1, args=(args.in_dir, hubert, 5, args.dest_dir, ))
         logger.info(f"Dumping latent features from {args.output_layer + 1}th layer of HuBERT's encoder...")
-        dump_latent_features(args.dataframe_path, args.in_dir, args.dest_dir, args.start_perc, args.end_perc, hubert, args.output_layer, args.train_iteration, batch_size=args.batch_size, save_csv=args.save_csv_for_dumped_features)
+        extract_latent_features(
+            args.dataframe_path, 
+            args.in_dir, 
+            args.dest_dir, 
+            data_slice=(args.start_perc, args.end_perc), 
+            model=hubert, 
+            layer_idx=args.output_layer, 
+            iteration_id=args.train_iteration, 
+            batch_size=args.batch_size, 
+            save_metadata_csv=args.save_csv_for_dumped_features
+        )
+
     
     logger.info("Features dumped.")
 
