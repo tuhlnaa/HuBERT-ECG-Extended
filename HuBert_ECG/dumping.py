@@ -1,9 +1,6 @@
 import concurrent.futures
-from dataclasses import dataclass
 import logging
 import os
-from pathlib import Path
-from typing import Optional
 import torch
 import torchaudio
 
@@ -11,16 +8,19 @@ import numpy as np
 import pandas as pd
 import scipy.stats as stats
 
-from dataset import ECGDataset
+from dataclasses import dataclass
+from pathlib import Path
 from rich.logging import RichHandler
 from scipy import signal
-from scipy.fft import fft
+from scipy.fft import fft, rfft
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from typing import Optional
 
 # Import custom modules
-from hubert_ecg import HuBERTECG, HuBERTECGConfig
 from config import create_dumping_parser, init_seeds
+from dataset import ECGDataset
+from hubert_ecg import HuBERTECG, HuBERTECGConfig
 
 # Configure logging
 logging.basicConfig(
@@ -58,91 +58,131 @@ FEATURE_DIMS = {
 }
 
 
-def compute_mfcc_features_and_derivatives(x : torch.Tensor, samp_rate : int):
-    ''' Compute MFCC features and their first and second derivatives from a signal.'''
-    
-    with torch.no_grad():
-        x = x.view(1, -1)
-
-        mfccs = torchaudio.compliance.kaldi.mfcc(
-            waveform=x,
-            sample_frequency=samp_rate,
-            use_energy=False,
-            frame_length= x.size(-1) / samp_rate * 1000,
-            frame_shift=100
-        )  # (time, freq)
-        mfccs = mfccs.transpose(0, 1)  # (freq, time)
-        deltas = torchaudio.functional.compute_deltas(mfccs)
-        ddeltas = torchaudio.functional.compute_deltas(deltas)
-        concat = torch.cat([mfccs, deltas, ddeltas], dim=0)
-        concat = concat.transpose(0, 1).contiguous()  # (freq, time)
-        return concat # (1, 39) torch.Tensor
-
-
-def get_signal_features(signal):
-    '''Extracts 17 features from a signal considering both time and frequency domain'''
-
-    ## TIME DOMAIN ##
-    Min = (np.min(signal))
-    Max = (np.max(signal))
-    Mean = (np.mean(signal))
-    Power = (np.mean(signal**2))
-    Rms = (np.sqrt(Power))
-    Var = (np.var(signal))
-    Std = (np.std(signal))
-    Peak = (np.max(np.abs(signal)))
-    P2p = (np.ptp(signal))
-    CrestFactor = (Peak/Rms)
-    Skew = (stats.skew(signal))
-    Kurtosis = (stats.kurtosis(signal))
-    
-    ## FREQ DOMAIN ##
-    ft = fft(signal)
-    S = np.abs(ft**2)/len(signal) 
-    Max_f = (np.max(S))
-    Sum_f = (np.sum(S))
-    Mean_f = (np.mean(S))
-    Var_f = (np.var(S))     
-    
-    features = [Min,Max,Mean,Rms,Var,Std,Power,Peak,P2p,CrestFactor,Skew,Kurtosis,Max_f,Sum_f,Mean_f,Var_f]
-        
-    return features
-
-
-def _extract_shard_features(
-    shard: np.ndarray,
-    feature_mode: str,
-    device: torch.device,
-    sample_rate: int
-) -> list:
+def compute_mfcc_with_deltas(
+    waveform: torch.Tensor,
+    sample_rate: int,
+    device: torch.device = torch.device('cpu')
+) -> torch.Tensor:
     """
-    Extract features from a single shard.
+    Compute MFCC features with first and second order derivatives (delta, delta-delta).
     
     Args:
-        shard: Input signal shard
-        feature_mode: One of 'time_freq', 'mfcc_only', 'mixed'
-        device: Torch device for computation
-        sample_rate: Sampling rate
+        waveform: Input audio tensor of shape (samples,) or (1, samples)
+        sample_rate: Sampling rate in Hz
+        device: Device for computation
+        
+    Returns:
+        Concatenated MFCC features of shape (time, 39) where 39 = 13 MFCCs * 3
+    """
+    with torch.no_grad():
+        if waveform.dim() == 1:
+            waveform = waveform.unsqueeze(0)
+        
+        # Ensure tensor is on correct device
+        waveform = waveform.to(device)
+        
+        # Compute MFCCs: (time, 13)
+        mfccs = torchaudio.compliance.kaldi.mfcc(
+            waveform=waveform,
+            sample_frequency=sample_rate,
+            use_energy=False,
+            frame_length=waveform.size(-1) / sample_rate * 1000,
+            frame_shift=100
+        )
+        
+        # Transpose for delta computation: (13, time)
+        mfccs_t = mfccs.transpose(0, 1)
+        deltas = torchaudio.functional.compute_deltas(mfccs_t)
+        delta_deltas = torchaudio.functional.compute_deltas(deltas)
+        
+        # Concatenate and transpose back: (time, 39)
+        features = torch.cat([mfccs_t, deltas, delta_deltas], dim=0)
+        features = features.transpose(0, 1).contiguous()
+        
+        return features
+
+
+def compute_time_freq_features(signal: np.ndarray) -> list:
+    """
+    Extract 16 time-domain and frequency-domain features from a signal.
+    
+    Features include:
+    - Time domain (12): min, max, mean, RMS, variance, std, power, peak, 
+                        peak-to-peak, crest factor, skewness, kurtosis
+    - Frequency domain (4): max, sum, mean, variance of power spectrum
+    
+    Args:
+        signal: 1D numpy array of signal values
+        
+    Returns:
+        List of 16 feature values
+    """
+    # Time domain features
+    signal_min = np.min(signal)
+    signal_max = np.max(signal)
+    signal_mean = np.mean(signal)
+    signal_power = np.mean(signal ** 2)
+    signal_rms = np.sqrt(signal_power)
+    signal_var = np.var(signal)
+    signal_std = np.std(signal)
+    signal_peak = np.max(np.abs(signal))
+    signal_p2p = np.ptp(signal)
+    crest_factor = signal_peak / signal_rms if signal_rms > 0 else 0.0
+    skewness = stats.skew(signal)
+    kurtosis = stats.kurtosis(signal)
+    
+    # Frequency domain features
+    power_spectrum = np.abs(fft(signal)) ** 2 / len(signal)
+    spectrum_max = np.max(power_spectrum)
+    spectrum_sum = np.sum(power_spectrum)
+    spectrum_mean = np.mean(power_spectrum)
+    spectrum_var = np.var(power_spectrum)
+    
+    return [
+        signal_min, signal_max, signal_mean, signal_rms, signal_var, signal_std,
+        signal_power, signal_peak, signal_p2p, crest_factor, skewness, kurtosis,
+        spectrum_max, spectrum_sum, spectrum_mean, spectrum_var
+    ]
+
+
+def extract_shard_features(
+    shard: np.ndarray,
+    feature_mode: str,
+    sample_rate: int,
+    device: torch.device = torch.device('cpu')
+) -> list:
+    """
+    Extract features from a single audio shard based on the specified mode.
+    
+    Args:
+        shard: Input signal shard (1D numpy array)
+        feature_mode: Feature extraction mode
+            - 'time_freq': Time and frequency domain features only (16 features)
+            - 'mfcc_only': MFCC with deltas (39 features per frame, flattened)
+            - 'mixed': Time/freq features + first 13 MFCCs (29 features)
+        sample_rate: Sampling rate in Hz
+        device: Torch device for MFCC computation
         
     Returns:
         List of feature values
     """
     if feature_mode == 'time_freq':
-        return get_signal_features(shard)
+        return compute_time_freq_features(shard)
     
-    # Compute MFCCs
-    mfccs = compute_mfcc_features_and_derivatives(
-        torch.from_numpy(shard).to(device), 
-        sample_rate
-    )
-    mfccs = mfccs.cpu().numpy().flatten().tolist()
-    
+    # Compute MFCCs (returns single frame for short signals)
+    waveform = torch.from_numpy(shard).float()
+    mfccs = compute_mfcc_with_deltas(waveform, sample_rate, device)
+    mfccs_flat = mfccs.cpu().numpy().flatten().tolist()
+
     if feature_mode == 'mfcc_only':
-        return mfccs
+        return mfccs_flat
     
-    # Mixed mode: combine signal features with first 13 MFCCs
-    signal_features = get_signal_features(shard)
-    return signal_features + mfccs[:13]
+    if feature_mode == 'mixed':
+        # Combine time/freq features with first 13 MFCCs (static coefficients only)
+        time_freq_features = compute_time_freq_features(shard)
+        return time_freq_features + mfccs_flat[:13]
+    
+    raise ValueError(f"Unknown feature_mode: {feature_mode}")
 
 
 def _trim_lead_data(data: np.ndarray, config: SamplingConfig) -> np.ndarray:
@@ -264,14 +304,11 @@ def extract_ecg_features(
     
     # Skip if features already exist with correct shape
     if output_path.exists():
-        try:
-            existing_features = np.load(output_path)
-            expected_dim = FEATURE_DIMS.get(feature_mode)
-            if existing_features.shape[1] == expected_dim:
-                logger.info(f"Skipping {filename}: features already exist")
-                return None
-        except Exception as e:
-            logger.warning(f"Error loading existing features for {filename}: {e}")
+        existing_features = np.load(output_path)
+        expected_dim = FEATURE_DIMS.get(feature_mode)
+        if existing_features.shape[1] == expected_dim:
+            logger.info(f"Skipping {filename}: features already exist")
+            return None
     
     # Validate sampling rate
     if sample_rate not in SAMPLING_CONFIGS:
@@ -310,7 +347,7 @@ def extract_ecg_features(
     
     # Extract features from each shard
     features = [
-        _extract_shard_features(shard, feature_mode, device, sample_rate)
+        extract_shard_features(shard, feature_mode, sample_rate, device)
         for shard in shards
     ]
     
@@ -323,9 +360,8 @@ def extract_ecg_features(
     
     # Save features
     features_array = np.array(features, dtype=np.float32)
-    output_path_no_ext = output_dir / filename.replace('.npy', '')
-    np.save(output_path_no_ext, features_array)
-    logger.info(f"Saved features to {output_path_no_ext}.npy")
+    np.save(output_path, features_array)
+    logger.info(f"Saved features to {output_path}")
     
     return features_array
 
@@ -342,11 +378,11 @@ def main(args):
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     if args.mfcc_only:
-        feature_mode = 'mfcc_only'
+        feature_mode = 'mfcc_only'  # output shape: (93, 39)
     elif args.time_freq:
-        feature_mode = 'time_freq'
+        feature_mode = 'time_freq'  # output shape: (93, 16)
     else:
-        feature_mode = 'mixed'
+        feature_mode = 'mixed'  # output shape: (93, 29)
 
     if args.train_iteration == 1:
         logger.info("Loading dataframe...")
@@ -356,8 +392,11 @@ def main(args):
         dataframe.apply(extract_ecg_features, axis=1, args=(in_dir, dest_dir, feature_mode, device, args.samp_rate))
     else:
         logger.info("Loading HuBERT model to get latent features from...")
-        checkpoint = torch.load(args.hubert_path, map_location='cpu')
-        hubert = HuBERTECG(checkpoint['model_config'])
+        checkpoint = torch.load(args.hubert_path, map_location='cpu', weights_only=False)
+        model_config = checkpoint['model_config']
+        model_config.conv_pos_batch_norm = False
+
+        hubert = HuBERTECG(model_config)
         hubert.load_state_dict(checkpoint['model_state_dict'], strict=False)
         hubert = hubert.to(device)
         hubert.eval()
