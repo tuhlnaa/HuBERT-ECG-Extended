@@ -1,38 +1,55 @@
 # HuBERT-ECG as a Self-Supervised Foundation Model for Broad and Scalable Cardiac Application
 
+[![arXiv](https://img.shields.io/badge/medRxiv-2024.11.14.24317328-B31B1B?logo=arxiv)](https://www.medrxiv.org/content/10.1101/2024.11.14.24317328v2)
 [![HuggingFace](https://img.shields.io/badge/HuggingFace-Model-FFD21E?logo=huggingface)](https://huggingface.co/Edoardo-BS)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python)](https://pytorch.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.6%2B-EE4C2C?logo=pytorch)](https://pytorch.org/)
-[![GitHub repo size](https://img.shields.io/github/repo-size/tuhlnaa/HuBERT-ECG-Extended?label=Repo%20size)](https://github.com/tuhlnaa/UVI-Net-Extended)
+
+A self-supervised foundation model for electrocardiogram (ECG) analysis, pre-trained on 9.1 million 12-lead ECGs covering 164 cardiovascular conditions.
 
 <br>
 
-## Abstract
+## 🔍 Overview
 
-[![arXiv](https://img.shields.io/badge/medRxiv-2024.11.14.24317328-B31B1B?logo=arxiv)](https://www.medrxiv.org/content/10.1101/2024.11.14.24317328v2)
+HuBERT-ECG addresses the challenge of limited ECG datasets by leveraging self-supervised learning on a large-scale corpus. The model achieves:
 
-Deep learning models have shown remarkable performance in electrocardiogram (ECG) analysis, but the limited availability and size of ECG datasets have constrained their success, resulting in systems that are more task specialists than versatile generalists. To counter this, we introduce HuBERT-ECG, a novel self-supervised foundation ECG model pre-trained on a large and diverse dataset of 9.1 million 12-lead ECGs encompassing 164 cardiovascular conditions. By simply adding a proper output layer, HuBERT-ECG can be fine-tuned for a wide array of downstream tasks, from diagnosing diseases to predicting future cardiovascular events. Across diverse real-world scenarios, HuBERT-ECG achieves AUROCs from 0.843 on small datasets to 0.99 on larger sources. When fine-tuned to detect 164 overlapping conditions simultaneously, our model delivers AUROCs above 0.9 and 0.95 for up to 140 and 97 diseases, respectively. HuBERT-ECG can also predict death events within a 2-year follow-up with AUROCs up to 0.91. We release pre-trained models and code as building baselines.
+- **AUROCs 0.843-0.99** across diverse downstream tasks
+- **140+ diseases** detected with AUROC > 0.9
+- **Mortality prediction** with AUROC up to 0.91 (2-year follow-up)
+
+### Architecture
+
+Built on the HuBERT (Hidden-Unit BERT) framework, adapted for multi-lead ECG signals with:
+- 12-lead ECG input processing
+- Self-supervised pre-training objectives
+- Task-agnostic feature extraction
+- Flexible fine-tuning heads for downstream tasks
 
 <br>
 
-## 🚀 Quick Start
+## 🛠️ Installation
+
+### Conda Environment
 
 ```bash
-# Create and activate conda environment
-conda create -n HuBERT-ECG python=3.11
-conda activate HuBERT-ECG
+# Create environment
+conda create -n hubert-ecg python=3.11
+conda activate hubert-ecg
 
-# Clone the repository
-git clone https://github.com/tuhlnaa/HuBERT-ECG-Extended.git
-cd HuBERT-ECG-Extended-master
+# Clone repository
+git clone https://github.com/Setsu-Kuhaku/HuBERT-ECG-CGMH.git
+cd HuBERT-ECG-CGMH
+```
 
-# Install dependencies
-# Linux
-chmod +x ./script/Install_dependencies.sh
-./script/Install_dependencies.sh
+**Linux/Mac:**
+```bash
+chmod +x ./scripts/install_dependencies.sh
+./scripts/install_dependencies.sh
+```
 
-# Windows
-./script/Install_dependencies.bat
+**Windows:**
+```bash
+./scripts/install_dependencies.bat
 ```
 
 <br>
