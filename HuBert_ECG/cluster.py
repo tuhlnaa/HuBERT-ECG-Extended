@@ -1,17 +1,22 @@
-import os
-os.environ["OPENBLAS_NUM_THREADS"] = "4"
-from dataset import ECGDataset
-from torch.utils.data import DataLoader
-from sklearn.cluster import MiniBatchKMeans
-from sklearn import preprocessing
 import joblib
-from tqdm import tqdm
-import argparse
-import numpy as np
+import os
 import random
-from loguru import logger
 import wandb
+import numpy as np
+
+from loguru import logger
+from sklearn import preprocessing
+from sklearn.cluster import MiniBatchKMeans
+from torch.utils.data import DataLoader
+from tqdm import tqdm
 from sklearn.metrics import davies_bouldin_score, calinski_harabasz_score
+
+# os.environ["OPENBLAS_NUM_THREADS"] = "4"
+
+# Import custom modules
+from dataset import ECGDataset
+from config import create_clustering_parser
+
 
 def cluster(args):
     
@@ -160,86 +165,16 @@ def evaluate_clustering(args):
     logger.info(f"Average Calinski-Harabasz score: {np.mean(ch_scores)}")
     wandb.log({"Average Davies-Bouldin score" : np.mean(db_scores)})
     wandb.log({"Average Calinski-Harabsz score" : np.mean(ch_scores)})
-           
-if __name__ == "__main__":
-    
-    parser = argparse.ArgumentParser(description="Cluster ECG features or representations")
-    
-    parser.add_argument(
-        "path_to_dataset_csv",
-        help="path to the dataset in csv format to use",
-        type=str
-    )
-    
-    parser.add_argument(
-        "in_dir",
-        help="path to the directory containing the features to cluster",
-        type=str
-    )
-    
-    parser.add_argument(
-        "--cluster", 
-        help="Whether to cluster or evaluate a model",
-        action="store_true"
-    )
-    
-    parser.add_argument(
-        "--n_clusters_start",
-        help="initial number of clusters",
-        type=int,
-    )
-    
-    parser.add_argument(
-        "--n_clusters_end",
-        help="final number of clusters",
-        type=int,
-    )
-    
-    parser.add_argument(
-        "--step",
-        help="step between two consecutive number of clusters",
-        type=int,
-    )
-    
-    parser.add_argument(
-        "train_iteration",
-        help="iteration of the training",
-        type=int,
-    )
-    
-    parser.add_argument(
-        "batch_size",
-        help="batch size",
-        type=int,
-    )
-    
-    parser.add_argument(
-        "--model_path",
-        help="path to the model to evaluate or to load in order to resume clustering",
-        type=str,
-        default=None
-    )
 
-    parser.add_argument(
-        "--layer",
-        help="In case train_iteration >= 2, which hidden layer latents were extracted from",
-        type=int,
-        default=None
-    )
-    
-    args = parser.parse_args()
-    
-    #check args
+
+def main():
+    args = create_clustering_parser()
+
     if args.cluster:
-        assert args.n_clusters_start is not None, "n_clusters_start must be specified"
-        assert args.n_clusters_end is not None, "n_clusters_end must be specified"
-        assert args.step is not None, "step must be specified"
-        if args.train_iteration >= 2:
-            assert args.layer is not None, "layer must be specified when train_iteration >= 2"
         cluster(args)
     else:
-        assert args.model_path is not None, "model_path must be specified"
         evaluate_clustering(args)
-                
-            
-        
+
+
+if __name__ == "__main__":
+    main()

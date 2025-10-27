@@ -370,3 +370,93 @@ def validate_dumping_args(args):
     # Raise all errors at once
     if errors:
         raise ValueError("Argument validation failed:\n" + "\n".join(f"  - {e}" for e in errors))
+
+
+def create_clustering_parser():
+    """Create and configure argument parser for clustering."""
+    parser = argparse.ArgumentParser(description="Cluster ECG features or representations")
+    
+    # Required arguments
+    required = parser.add_argument_group('required arguments')
+    required.add_argument("path_to_dataset_csv", type=str, help="Path to the dataset in csv format to use")
+    required.add_argument("in_dir", type=str, help="Path to the directory containing the features to cluster")
+    required.add_argument("train_iteration", type=int, help="Iteration of the training")
+    required.add_argument("batch_size", type=int, help="Batch size")
+    
+    # Mode selection
+    parser.add_argument("--cluster", action="store_true", help="Whether to cluster or evaluate a model")
+    
+    # Clustering arguments
+    parser.add_argument("--n_clusters_start", type=int, help="Initial number of clusters. Required when --cluster is used")
+    parser.add_argument("--n_clusters_end", type=int, help="Final number of clusters. Required when --cluster is used")
+    parser.add_argument("--step", type=int, help="Step between two consecutive number of clusters. Required when --cluster is used")
+    
+    # Model and layer arguments
+    parser.add_argument("--model_path", type=str, default=None, help="Path to the model to evaluate or to load in order to resume clustering")
+    parser.add_argument("--layer", type=int, default=None, help="In case train_iteration >= 2, which hidden layer latents were extracted from")
+    
+    args = parser.parse_args()
+    
+    # Print configuration
+    RichPrinter.print_config(args, "Configuration")
+    
+    # Validate arguments
+    validate_clustering_args(args)
+
+    return args
+
+
+def validate_clustering_args(args):
+    """Validate argument combinations and constraints."""
+    errors = []
+    
+    # Validate clustering mode requirements
+    if args.cluster:
+        if args.n_clusters_start is None:
+            errors.append("n_clusters_start must be specified when --cluster is used")
+        
+        if args.n_clusters_end is None:
+            errors.append("n_clusters_end must be specified when --cluster is used")
+        
+        if args.step is None:
+            errors.append("step must be specified when --cluster is used")
+        
+        # Validate cluster range
+        if args.n_clusters_start is not None and args.n_clusters_end is not None:
+            if args.n_clusters_start > args.n_clusters_end:
+                errors.append(f"n_clusters_start ({args.n_clusters_start}) must be <= n_clusters_end ({args.n_clusters_end})")
+        
+        # Validate step
+        if args.step is not None and args.step <= 0:
+            errors.append(f"step must be positive. Got {args.step}")
+    
+    # Validate evaluation mode requirements
+    if not args.cluster:
+        if args.model_path is None:
+            errors.append("model_path must be specified when not in clustering mode")
+    
+    # Validate layer requirement for train_iteration >= 2
+    if args.train_iteration >= 2 and args.layer is None:
+        errors.append("layer must be specified when train_iteration >= 2")
+    
+    # Validate model_path file existence
+    if args.model_path is not None and not os.path.isfile(args.model_path):
+        errors.append(f"model_path must be a valid file path. Got {args.model_path}")
+    
+    # Warnings for unnecessary arguments
+    if not args.cluster and args.n_clusters_start is not None:
+        logger.warning("n_clusters_start is not needed in evaluation mode. Ignoring it")
+    
+    if not args.cluster and args.n_clusters_end is not None:
+        logger.warning("n_clusters_end is not needed in evaluation mode. Ignoring it")
+    
+    if not args.cluster and args.step is not None:
+        logger.warning("step is not needed in evaluation mode. Ignoring it")
+    
+    if args.train_iteration < 2 and args.layer is not None:
+        logger.warning("layer is not needed when train_iteration < 2. Ignoring it")
+    
+    # Raise all errors at once
+    if errors:
+        raise ValueError("Argument validation failed:\n" + "\n".join(f"  - {e}" for e in errors))
+
