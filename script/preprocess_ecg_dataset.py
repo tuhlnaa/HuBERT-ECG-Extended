@@ -18,7 +18,7 @@ import numpy as np
 import multiprocessing as mp
 
 from pathlib import Path
-from typing import Dict, Union, Generator, Tuple, List
+from typing import Dict, Union, Tuple, List
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from rich.logging import RichHandler
 from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, BarColumn, TextColumn

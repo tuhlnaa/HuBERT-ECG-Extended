@@ -1,3 +1,19 @@
+"""
+ECG Feature Extraction Module - Morphological and Latent Feature Dumping
+
+This module provides functionality for extracting features from ECG datasets
+for HuBERT-ECG training. Supports both morphological feature extraction 
+(iteration 1) and latent feature extraction from trained HuBERT models 
+(iterations 2+). Features are saved as numpy arrays for downstream tasks.
+
+Usage:
+# Extract morphological features (iteration 1)
+python ./script/extract_features.py 1 "/path/to/dataframe.csv" "/path/to/ecg/data" "/path/to/output" 0.0 1.0 --mfcc_only --samp_rate 500
+
+# Extract latent features (iteration 2+)
+python ./script/extract_features.py 2 "/path/to/dataframe.csv" "/path/to/ecg/data" "/path/to/output" 0.0 1.0 --hubert_path "/path/to/model.pt" --output_layer 2 --batch_size 32
+"""
+
 import logging
 import sys
 import torch

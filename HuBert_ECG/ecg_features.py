@@ -12,7 +12,6 @@ from rich.logging import RichHandler
 from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, BarColumn, TextColumn
 from scipy import signal
 from scipy.fft import fft
-from tqdm import tqdm
 from typing import Dict, List, Optional, Tuple
 
 
