@@ -12,7 +12,7 @@ from rich.logging import RichHandler
 from scipy import signal
 from scipy.fft import fft
 from tqdm import tqdm
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 # Configure logging
 logging.basicConfig(
@@ -272,7 +272,6 @@ class ECGFeatureExtractor:
     def __init__(self, device: torch.device = torch.device('cpu')):
         self.device = device
     
-
     def should_skip_extraction(self, output_path: Path, feature_mode: str) -> bool:
         """Check if feature extraction can be skipped."""
         if not output_path.exists():
@@ -312,15 +311,16 @@ class ECGFeatureExtractor:
         
         # Skip if features already exist with correct shape
         if self.should_skip_extraction(output_path, feature_mode):
-            logger.info(f"Skipping {filename}: features already exist")
             return None
         
         # Validate sampling rate
         if sample_rate not in Config.SAMPLING:
-            raise ValueError(
+            error_msg = (
                 f"Unsupported sample_rate: {sample_rate}. "
                 f"Must be one of {list(Config.SAMPLING.keys())}"
             )
+            logger.error(error_msg)
+            raise ValueError(error_msg)
         
         config = Config.SAMPLING[sample_rate]
         
@@ -329,6 +329,7 @@ class ECGFeatureExtractor:
         data = processor.load_and_preprocess(input_path, max_samples, filename)
         
         if data is None:
+            logger.warning(f"Failed to load and preprocess data for {filename}")
             return None
         
         # Process data into shards
@@ -347,21 +348,78 @@ class ECGFeatureExtractor:
         # Save features
         features_array = np.array(features, dtype=np.float32)
         np.save(output_path, features_array)
-        logger.info(f"Saved features to {output_path}")
         
         return features_array
     
 
     def extract_batch(self, dataframe: pd.DataFrame, input_dir: Path, 
-                     output_dir: Path, feature_mode: str, sample_rate: int) -> None:
-        """Extract morphological features for all records in dataframe."""
-        logger.info("Extracting morphological features...")
+                     output_dir: Path, feature_mode: str, sample_rate: int) -> Dict[str, int]:
+        """
+        Extract morphological features for all records in dataframe.
         
-        for record in tqdm(dataframe.itertuples(index=False), total=len(dataframe)):
-            self.extract_features(
-                record=record,
-                input_dir=input_dir,
-                output_dir=output_dir,
-                feature_mode=feature_mode,
-                sample_rate=sample_rate,
-            )
+        Returns:
+            Dictionary with extraction statistics:
+                - processed: Number of successfully processed records
+                - failed: Number of failed records
+                - skipped: Number of skipped records
+                - total: Total records in dataframe
+        """
+        total_records = len(dataframe)
+        
+        if total_records == 0:
+            logger.warning("No records found in dataframe")
+            return {"processed": 0, "failed": 0, "skipped": 0, "total": 0}
+        
+        logger.info(f"Starting feature extraction for {total_records} records")
+        
+        processed_count = 0
+        failed_count = 0
+        skipped_count = 0
+        failed_records = []
+        
+        for record in tqdm(dataframe.itertuples(index=False), total=total_records, desc="Extracting features"):
+            try:
+                result = self.extract_features(
+                    record=record,
+                    input_dir=input_dir,
+                    output_dir=output_dir,
+                    feature_mode=feature_mode,
+                    sample_rate=sample_rate,
+                )
+                
+                if result is None:
+                    skipped_count += 1
+                else:
+                    processed_count += 1
+                    
+            except Exception as e:
+                failed_count += 1
+                error_msg = f"Failed to extract features for {record.filename}: {str(e)}"
+                failed_records.append((record.filename, error_msg))
+                logger.error(error_msg)
+        
+        self._log_failed_records(failed_records, failed_count)
+        
+        stats = {
+            "processed": processed_count,
+            "failed": failed_count,
+            "skipped": skipped_count,
+            "total": total_records,
+        }
+        
+        logger.info(f"Feature extraction complete: {stats}")
+        return stats
+    
+
+    def _log_failed_records(self, failed_records: List[Tuple[str, str]], 
+                           failed_count: int) -> None:
+        """Log summary of failed records."""
+        if not failed_records:
+            return
+        
+        logger.error(f"{failed_count} records failed feature extraction:")
+        for filename, error_msg in failed_records[:3]:
+            logger.error(f"  {filename}: {error_msg}")
+        
+        if len(failed_records) > 3:
+            logger.error(f"  ... and {len(failed_records) - 3} more failures")

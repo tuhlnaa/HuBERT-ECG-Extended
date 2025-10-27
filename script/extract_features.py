@@ -202,10 +202,7 @@ class FeatureExtractionPipeline:
         self.input_dir = Path(args.in_dir)
         self.output_dir = Path(args.dest_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        
-        init_seeds(seed=42)
     
-
     def run(self) -> None:
         """
         Execute feature extraction pipeline.
@@ -217,8 +214,6 @@ class FeatureExtractionPipeline:
             self._extract_morphological_features()
         else:
             self._extract_latent_features()
-        
-        logger.info("Feature extraction complete.")
     
 
     def _extract_morphological_features(self) -> None:
@@ -298,6 +293,7 @@ class FeatureExtractionPipeline:
 def main():
     """Main entry point for feature extraction."""
     args = create_dumping_parser()
+    init_seeds(seed=42)
     pipeline = FeatureExtractionPipeline(args)
     pipeline.run()
 
