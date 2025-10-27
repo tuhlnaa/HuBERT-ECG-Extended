@@ -1,6 +1,7 @@
 import logging
 import sys
 import torch
+
 import numpy as np
 import pandas as pd
 
@@ -231,7 +232,6 @@ class FeatureExtractionPipeline:
         dataframe = self._load_and_slice_dataframe()
         
         # Extract features
-        feature_mode = 'mixed'
         extractor = ECGFeatureExtractor(SAMPLING_CONFIGS, self.device)
         extractor.extract_batch(
             dataframe=dataframe,
