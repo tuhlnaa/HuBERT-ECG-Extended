@@ -42,12 +42,27 @@ class SamplingConfig:
 
 # Configuration mapping for different sampling rates
 SAMPLING_CONFIGS = {
-    500: SamplingConfig(shard_size=322, compression_factor=320, 
-                        trim_start=2, trim_end_even=2, trim_end_odd=3),
-    100: SamplingConfig(shard_size=64, compression_factor=64,
-                        trim_start=2, trim_end_even=2, trim_end_odd=2),
-    50: SamplingConfig(shard_size=32, compression_factor=32,
-                       trim_start=1, trim_end_even=1, trim_end_odd=1),
+    500: SamplingConfig(
+        shard_size=322, 
+        compression_factor=320,
+        trim_start=2, 
+        trim_end_even=2, 
+        trim_end_odd=3
+    ),
+    100: SamplingConfig(
+        shard_size=64, 
+        compression_factor=64,
+        trim_start=2, 
+        trim_end_even=2, 
+        trim_end_odd=2
+    ),
+    50: SamplingConfig(
+        shard_size=32, 
+        compression_factor=32,
+        trim_start=1, 
+        trim_end_even=1, 
+        trim_end_odd=1
+    ),
 }
 
 # Feature dimensions for validation
@@ -120,6 +135,29 @@ def _save_metadata_csv(
     logger.info(f"Saved metadata CSV: {csv_path}")
 
 
+def _create_sliced_dataset(
+    dataset_csv_path: Path | str,
+    ecg_dir: Path | str,
+    downsampling_factor: int,
+    data_slice: Tuple[float, float],
+) -> 'ECGDataset':
+    """Create and slice ECG dataset based on percentage range."""
+    dataset = ECGDataset(
+        path_to_dataset_csv=dataset_csv_path,
+        ecg_dir_path=ecg_dir,
+        downsampling_factor=downsampling_factor,
+        pretrain=False,
+        encode=True,
+    )
+    
+    start_perc, end_perc = data_slice
+    start_idx = int(start_perc * len(dataset))
+    end_idx = int(end_perc * len(dataset)) + 1
+    dataset.ecg_dataframe = dataset.ecg_dataframe.iloc[start_idx:end_idx].copy()
+    
+    return dataset
+
+
 def extract_latent_features(
     dataset_csv_path: Path | str,
     ecg_dir: Path | str,
@@ -129,7 +167,7 @@ def extract_latent_features(
     batch_size: int = 32,
     data_slice: Tuple[float, float] = (0.0, 1.0),
     downsampling_factor: int = 5,
-    num_workers: int = 4,
+    num_workers: int = 0,
     save_metadata_csv: bool = False,
     iteration_id: Optional[int] = None,
 ) -> None:
@@ -156,18 +194,12 @@ def extract_latent_features(
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Load and slice dataset
-    dataset = ECGDataset(
-        path_to_dataset_csv=dataset_csv_path,
-        ecg_dir_path=ecg_dir,
+    dataset = _create_sliced_dataset(
+        dataset_csv_path=dataset_csv_path,
+        ecg_dir=ecg_dir,
         downsampling_factor=downsampling_factor,
-        pretrain=False,
-        encode=True
+        data_slice=data_slice,
     )
-    
-    start_perc, end_perc = data_slice
-    start_idx = int(start_perc * len(dataset))
-    end_idx = int(end_perc * len(dataset)) + 1
-    dataset.ecg_dataframe = dataset.ecg_dataframe.iloc[start_idx:end_idx].copy()
     
     # Save metadata CSV if requested
     if save_metadata_csv:
@@ -176,7 +208,7 @@ def extract_latent_features(
             output_dir=output_dir,
             layer_idx=layer_idx,
             data_slice=data_slice,
-            iteration_id=iteration_id
+            iteration_id=iteration_id,
         )
     
     # Setup dataloader
@@ -186,7 +218,7 @@ def extract_latent_features(
         num_workers=num_workers,
         collate_fn=dataset.collate,
         drop_last=False,
-        pin_memory=torch.cuda.is_available()
+        pin_memory=torch.cuda.is_available(),
     )
     
     # Extract and save features
@@ -196,8 +228,26 @@ def extract_latent_features(
         dataloader=dataloader,
         layer_idx=layer_idx,
         output_dir=output_dir,
-        expected_hidden_size=model.config.hidden_size
+        expected_hidden_size=model.config.hidden_size,
     )
+
+
+def load_hubert_model(
+    checkpoint_path: Path | str,
+    device: torch.device,
+) -> torch.nn.Module:
+    """Load HuBERT model from checkpoint."""
+    logger.info("Loading HuBERT model...")
+    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+    model_config = checkpoint['model_config']
+    model_config.conv_pos_batch_norm = False
+    
+    model = HuBERTECG(model_config)
+    model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+    model = model.to(device)
+    model.eval()
+    
+    return model
 
 
 def compute_mfcc_with_deltas(
@@ -346,6 +396,16 @@ def _trim_lead_data(data: np.ndarray, config: SamplingConfig) -> np.ndarray:
     return np.concatenate(trimmed_leads)
 
 
+def _should_skip_extraction(output_path: Path, feature_mode: str) -> bool:
+    """Check if feature extraction can be skipped."""
+    if not output_path.exists():
+        return False
+    
+    existing_features = np.load(output_path)
+    expected_dim = FEATURE_DIMS.get(feature_mode)
+    return existing_features.shape[1] == expected_dim
+
+
 def extract_ecg_features(
     record,
     input_dir: Path,
@@ -377,20 +437,61 @@ def extract_ecg_features(
     output_path = output_dir / filename
     
     # Skip if features already exist with correct shape
-    if output_path.exists():
-        existing_features = np.load(output_path)
-        expected_dim = FEATURE_DIMS.get(feature_mode)
-        if existing_features.shape[1] == expected_dim:
-            logger.info(f"Skipping {filename}: features already exist")
-            return None
+    if _should_skip_extraction(output_path, feature_mode):
+        logger.info(f"Skipping {filename}: features already exist")
+        return None
     
     # Validate sampling rate
-    if sample_rate not in SAMPLING_CONFIGS:
-        raise ValueError(f"Unsupported sample_rate: {sample_rate}. Must be one of {list(SAMPLING_CONFIGS.keys())}")
-    
+    _validate_sample_rate(sample_rate)
     config = SAMPLING_CONFIGS[sample_rate]
     
     # Load and preprocess data
+    data = _load_and_preprocess_ecg(
+        input_path=input_path,
+        max_samples=max_samples,
+        sample_rate=sample_rate,
+        base_sample_rate=base_sample_rate,
+        filename=filename,
+    )
+    
+    if data is None:
+        return None
+    
+    # Process data into shards and extract features
+    features_array = _process_ecg_to_features(
+        data=data,
+        config=config,
+        feature_mode=feature_mode,
+        sample_rate=sample_rate,
+        device=device,
+    )
+    
+    # Save features
+    np.save(output_path, features_array)
+    logger.info(f"Saved features to {output_path}")
+    
+    return features_array
+
+
+
+
+def _validate_sample_rate(sample_rate: int) -> None:
+    """Validate that the sample rate is supported."""
+    if sample_rate not in SAMPLING_CONFIGS:
+        raise ValueError(
+            f"Unsupported sample_rate: {sample_rate}. "
+            f"Must be one of {list(SAMPLING_CONFIGS.keys())}"
+        )
+
+
+def _load_and_preprocess_ecg(
+    input_path: Path,
+    max_samples: int,
+    sample_rate: int,
+    base_sample_rate: int,
+    filename: str,
+) -> Optional[np.ndarray]:
+    """Load and preprocess ECG data with downsampling if needed."""
     data = np.load(input_path)
     data = data[:, :max_samples]
     
@@ -404,6 +505,17 @@ def extract_ecg_features(
         decimation_factor = base_sample_rate // sample_rate
         data = signal.decimate(data, decimation_factor, axis=1)
     
+    return data
+
+
+def _process_ecg_to_features(
+    data: np.ndarray,
+    config: SamplingConfig,
+    feature_mode: str,
+    sample_rate: int,
+    device: torch.device,
+) -> np.ndarray:
+    """Process ECG data into feature vectors."""
     # Calculate expected final length
     final_length = data.shape[0] * data.shape[1]
     
@@ -426,70 +538,108 @@ def extract_ecg_features(
     ]
     
     # Validate output
-    expected_dim = FEATURE_DIMS[feature_mode]
-    assert len(features) == n_shards, \
-        f"Expected {n_shards} feature vectors, got {len(features)}"
-    assert len(features[0]) == expected_dim, \
-        f"Expected {expected_dim} features for mode '{feature_mode}', got {len(features[0])}"
+    _validate_features(features, n_shards, feature_mode)
     
-    # Save features
-    features_array = np.array(features, dtype=np.float32)
-    np.save(output_path, features_array)
-    logger.info(f"Saved features to {output_path}")
+    return np.array(features, dtype=np.float32)
 
-    return features_array
+
+def _validate_features(
+    features: list,
+    expected_n_shards: int,
+    feature_mode: str,
+) -> None:
+    """Validate extracted features dimensions."""
+    expected_dim = FEATURE_DIMS[feature_mode]
+    
+    assert len(features) == expected_n_shards, (
+        f"Expected {expected_n_shards} feature vectors, got {len(features)}"
+    )
+    assert len(features[0]) == expected_dim, (
+        f"Expected {expected_dim} features for mode '{feature_mode}', "
+        f"got {len(features[0])}"
+    )
+
+
+def extract_morphological_features(
+    dataframe: pd.DataFrame,
+    input_dir: Path,
+    output_dir: Path,
+    feature_mode: str,
+    device: torch.device,
+    sample_rate: int,
+) -> None:
+    """Extract morphological features for all records in dataframe."""
+    logger.info("Extracting morphological features...")
+    
+    for record in tqdm(dataframe.itertuples(index=False), total=len(dataframe)):
+        extract_ecg_features(
+            record=record,
+            input_dir=input_dir,
+            output_dir=output_dir,
+            feature_mode=feature_mode,
+            device=device,
+            sample_rate=sample_rate,
+        )
 
 
 def main(args):
-    '''
-    Function called with arguments passed through shell and used to dump both morphological and latent features.
-    '''
+    """
+    Extract ECG features based on training iteration.
+    
+    Iteration 1: Extract morphological features
+    Iteration 2+: Extract latent features from HuBERT model
+    """
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     init_seeds(seed=42)
     
-    in_dir = Path(args.in_dir)
-    dest_dir = Path(args.dest_dir)
-    dest_dir.mkdir(parents=True, exist_ok=True)
-
-    if args.mfcc_only:
-        feature_mode = 'mfcc_only'  # output shape: (93, 39)
-    elif args.time_freq:
-        feature_mode = 'time_freq'  # output shape: (93, 16)
-    else:
-        feature_mode = 'mixed'  # output shape: (93, 29)
-
-    if args.train_iteration == 1:
-        logger.info("Loading dataframe...")
-        dataframe = pd.read_csv(args.dataframe_path)
-        dataframe = dataframe.iloc[int(args.start_perc * len(dataframe)) : int(args.end_perc * len(dataframe))+1]
-        logger.info("Dumping morphological features...")
-        dataframe.apply(extract_ecg_features, axis=1, args=(in_dir, dest_dir, feature_mode, device, args.samp_rate))
-    else:
-        logger.info("Loading HuBERT model to get latent features from...")
-        checkpoint = torch.load(args.hubert_path, map_location='cpu', weights_only=False)
-        model_config = checkpoint['model_config']
-        model_config.conv_pos_batch_norm = False
-
-        hubert = HuBERTECG(model_config)
-        hubert.load_state_dict(checkpoint['model_state_dict'], strict=False)
-        hubert = hubert.to(device)
-        hubert.eval()
-        #dataframe.apply(dump_ecg_features_from_hubert, axis=1, args=(args.in_dir, hubert, 5, args.dest_dir, ))
-        logger.info(f"Dumping latent features from {args.output_layer + 1}th layer of HuBERT's encoder...")
-        extract_latent_features(
-            args.dataframe_path, 
-            args.in_dir, 
-            args.dest_dir, 
-            data_slice=(args.start_perc, args.end_perc), 
-            model=hubert, 
-            layer_idx=args.output_layer, 
-            iteration_id=args.train_iteration, 
-            batch_size=args.batch_size, 
-            save_metadata_csv=args.save_csv_for_dumped_features
-        )
-
+    input_dir = Path(args.in_dir)
+    output_dir = Path(args.dest_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
     
-    logger.info("Features dumped.")
+    # Determine feature mode
+    if args.mfcc_only:
+        feature_mode = 'mfcc_only'
+    elif args.time_freq:
+        feature_mode = 'time_freq'
+    else:
+        feature_mode = 'mixed'
+    
+    # Load and slice dataframe
+    logger.info("Loading dataframe...")
+    dataframe = pd.read_csv(args.dataframe_path)
+    start_idx = int(args.start_perc * len(dataframe))
+    end_idx = int(args.end_perc * len(dataframe)) + 1
+    dataframe = dataframe.iloc[start_idx:end_idx]
+
+    # Extract features based on iteration
+    if args.train_iteration == 1:
+        extract_morphological_features(
+            dataframe=dataframe,
+            input_dir=input_dir,
+            output_dir=output_dir,
+            feature_mode=feature_mode,
+            device=device,
+            sample_rate=args.samp_rate,
+        )
+    else:
+        model = load_hubert_model(args.hubert_path, device)
+        logger.info(
+            f"Extracting latent features from layer {args.output_layer + 1} "
+            f"of HuBERT encoder..."
+        )
+        extract_latent_features(
+            dataset_csv_path=args.dataframe_path,
+            ecg_dir=input_dir,
+            output_dir=output_dir,
+            model=model,
+            layer_idx=args.output_layer,
+            data_slice=(args.start_perc, args.end_perc),
+            iteration_id=args.train_iteration,
+            batch_size=args.batch_size,
+            save_metadata_csv=args.save_csv_for_dumped_features,
+        )
+    
+    logger.info("Feature extraction complete.")
 
 
 if __name__ == "__main__":
