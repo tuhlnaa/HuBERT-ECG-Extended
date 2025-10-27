@@ -19,7 +19,7 @@ sys.path.append(str(PROJECT_ROOT))
 from HuBert_ECG.config import create_dumping_parser, init_seeds
 from HuBert_ECG.dataset import ECGDataset
 from HuBert_ECG.hubert_ecg import HuBERTECG, HuBERTECGConfig
-from HuBert_ECG.ecg_features import SAMPLING_CONFIGS, ECGFeatureExtractor
+from HuBert_ECG.ecg_features import ECGFeatureExtractor
 
 # Configure logging
 logging.basicConfig(
@@ -36,7 +36,7 @@ class ExtractionConfig:
     dataset_csv_path: Path
     ecg_dir: Path
     output_dir: Path
-    batch_size: int = 32
+    batch_size: int = 8
     data_slice: Tuple[float, float] = (0.0, 1.0)
     downsampling_factor: int = 5
     num_workers: int = 0
@@ -232,7 +232,7 @@ class FeatureExtractionPipeline:
         dataframe = self._load_and_slice_dataframe()
         
         # Extract features
-        extractor = ECGFeatureExtractor(SAMPLING_CONFIGS, self.device)
+        extractor = ECGFeatureExtractor(self.device)
         extractor.extract_batch(
             dataframe=dataframe,
             input_dir=self.input_dir,

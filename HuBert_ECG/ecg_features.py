@@ -14,7 +14,6 @@ from scipy.fft import fft
 from tqdm import tqdm
 from typing import List, Optional
 
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -33,37 +32,48 @@ class SamplingConfig:
     trim_end_odd: int
 
 
-# Configuration mapping for different sampling rates
-SAMPLING_CONFIGS = {
-    500: SamplingConfig(
-        shard_size=322, 
-        compression_factor=320,
-        trim_start=2, 
-        trim_end_even=2, 
-        trim_end_odd=3
-    ),
-    100: SamplingConfig(
-        shard_size=64, 
-        compression_factor=64,
-        trim_start=2, 
-        trim_end_even=2, 
-        trim_end_odd=2
-    ),
-    50: SamplingConfig(
-        shard_size=32, 
-        compression_factor=32,
-        trim_start=1, 
-        trim_end_even=1, 
-        trim_end_odd=1
-    ),
-}
+@dataclass
+class FeatureConfig:
+    """Configuration for feature extraction modes."""
+    name: str
+    dimension: int
 
-# Feature dimensions for validation
-FEATURE_DIMS = {
-    'time_freq': 16,
-    'mfcc_only': 39,
-    'mixed': 29,
-}
+
+# Consolidated configuration
+class Config:
+    """Central configuration for sampling rates and feature modes."""
+    
+    # Configuration mapping for different sampling rates
+    SAMPLING = {
+        500: SamplingConfig(
+            shard_size=322, 
+            compression_factor=320,
+            trim_start=2, 
+            trim_end_even=2, 
+            trim_end_odd=3
+        ),
+        100: SamplingConfig(
+            shard_size=64, 
+            compression_factor=64,
+            trim_start=2, 
+            trim_end_even=2, 
+            trim_end_odd=2
+        ),
+        50: SamplingConfig(
+            shard_size=32, 
+            compression_factor=32,
+            trim_start=1, 
+            trim_end_even=1, 
+            trim_end_odd=1
+        ),
+    }
+    
+    # Feature dimensions for each extraction mode
+    FEATURES = {
+        'time_freq': 16,
+        'mfcc_only': 39,
+        'mixed': 29,
+    }
 
 
 class FeatureExtractor:
@@ -120,6 +130,7 @@ class MFCCFeatureExtractor(FeatureExtractor):
         self.sample_rate = sample_rate
         self.device = device
     
+
     def compute_mfcc_with_deltas(self, waveform: torch.Tensor) -> torch.Tensor:
         """
         Compute MFCC features with first and second order derivatives.
@@ -153,6 +164,7 @@ class MFCCFeatureExtractor(FeatureExtractor):
             
             return features
     
+
     def extract(self, signal: np.ndarray) -> List[float]:
         """Extract MFCC features and return as flattened list."""
         waveform = torch.from_numpy(signal).float()
@@ -177,12 +189,6 @@ class MixedFeatureExtractor(FeatureExtractor):
 class FeatureExtractorFactory:
     """Factory for creating feature extractors based on mode."""
     
-    FEATURE_DIMS = {
-        'time_freq': 16,
-        'mfcc_only': 39,
-        'mixed': 29,
-    }
-    
     @staticmethod
     def create(feature_mode: str, sample_rate: int, 
                device: torch.device = torch.device('cpu')) -> FeatureExtractor:
@@ -196,10 +202,10 @@ class FeatureExtractorFactory:
         else:
             raise ValueError(f"Unknown feature_mode: {feature_mode}")
     
-    @classmethod
-    def get_feature_dim(cls, feature_mode: str) -> int:
+    @staticmethod
+    def get_feature_dim(feature_mode: str) -> int:
         """Get expected feature dimension for a given mode."""
-        return cls.FEATURE_DIMS[feature_mode]
+        return Config.FEATURES[feature_mode]
 
 
 class ECGDataProcessor:
@@ -263,8 +269,7 @@ class ECGDataProcessor:
 class ECGFeatureExtractor:
     """Main class for extracting features from ECG records."""
     
-    def __init__(self, sampling_configs: dict, device: torch.device = torch.device('cpu')):
-        self.sampling_configs = sampling_configs
+    def __init__(self, device: torch.device = torch.device('cpu')):
         self.device = device
     
 
@@ -311,13 +316,13 @@ class ECGFeatureExtractor:
             return None
         
         # Validate sampling rate
-        if sample_rate not in self.sampling_configs:
+        if sample_rate not in Config.SAMPLING:
             raise ValueError(
                 f"Unsupported sample_rate: {sample_rate}. "
-                f"Must be one of {list(self.sampling_configs.keys())}"
+                f"Must be one of {list(Config.SAMPLING.keys())}"
             )
         
-        config = self.sampling_configs[sample_rate]
+        config = Config.SAMPLING[sample_rate]
         
         # Load and preprocess data
         processor = ECGDataProcessor(config, sample_rate, base_sample_rate)
