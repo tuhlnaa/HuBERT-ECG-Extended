@@ -54,6 +54,17 @@ chmod +x ./scripts/install_dependencies.sh
 
 <br>
 
+## 📊 Data Preparation
+
+### Preprocessing
+
+```bash
+# Preprocess raw ECG files
+python ./script/preprocess_ecg_dataset.py --root-path "/path/to/ecg/data" --output-path "/path/to/output" --n-processes 10
+```
+
+<br>
+
 ## Reproducibility
 In the `reproducibility` folder you can find all train, validation, and test splits we used in our work as .csv files. You simply have to follow the instructions in the `reproducibility/README.md` to reproduce our results.
 As an example, you can easily fine-tune and evaluate an instance of HuBERT-ECG on PTB-XL All dataset, as shown in .sh scripts `finetune.sh` and `test.sh`.
