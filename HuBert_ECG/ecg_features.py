@@ -9,10 +9,12 @@ import scipy.stats as stats
 from dataclasses import dataclass
 from pathlib import Path
 from rich.logging import RichHandler
+from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, BarColumn, TextColumn
 from scipy import signal
 from scipy.fft import fft
 from tqdm import tqdm
 from typing import Dict, List, Optional, Tuple
+
 
 # Configure logging
 logging.basicConfig(
@@ -350,10 +352,10 @@ class ECGFeatureExtractor:
         np.save(output_path, features_array)
         
         return features_array
-    
+        
 
     def extract_batch(self, dataframe: pd.DataFrame, input_dir: Path, 
-                     output_dir: Path, feature_mode: str, sample_rate: int) -> Dict[str, int]:
+                    output_dir: Path, feature_mode: str, sample_rate: int) -> Dict[str, int]:
         """
         Extract morphological features for all records in dataframe.
         
@@ -377,26 +379,39 @@ class ECGFeatureExtractor:
         skipped_count = 0
         failed_records = []
         
-        for record in tqdm(dataframe.itertuples(index=False), total=total_records, desc="Extracting features"):
-            try:
-                result = self.extract_features(
-                    record=record,
-                    input_dir=input_dir,
-                    output_dir=output_dir,
-                    feature_mode=feature_mode,
-                    sample_rate=sample_rate,
-                )
-                
-                if result is None:
-                    skipped_count += 1
-                else:
-                    processed_count += 1
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("({task.completed}/{task.total})"),
+            TimeElapsedColumn(),
+        ) as progress:
+            
+            task_id = progress.add_task("[green]Extracting features", total=total_records)
+            
+            for record in dataframe.itertuples(index=False):
+                try:
+                    result = self.extract_features(
+                        record=record,
+                        input_dir=input_dir,
+                        output_dir=output_dir,
+                        feature_mode=feature_mode,
+                        sample_rate=sample_rate,
+                    )
                     
-            except Exception as e:
-                failed_count += 1
-                error_msg = f"Failed to extract features for {record.filename}: {str(e)}"
-                failed_records.append((record.filename, error_msg))
-                logger.error(error_msg)
+                    if result is None:
+                        skipped_count += 1
+                    else:
+                        processed_count += 1
+                        
+                except Exception as e:
+                    failed_count += 1
+                    error_msg = f"Failed to extract features for {record.filename}: {str(e)}"
+                    failed_records.append((record.filename, error_msg))
+                    logger.error(error_msg)
+                
+                progress.update(task_id, advance=1)
         
         self._log_failed_records(failed_records, failed_count)
         
@@ -409,7 +424,7 @@ class ECGFeatureExtractor:
         
         logger.info(f"Feature extraction complete: {stats}")
         return stats
-    
+
 
     def _log_failed_records(self, failed_records: List[Tuple[str, str]], 
                            failed_count: int) -> None:
