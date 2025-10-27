@@ -134,72 +134,6 @@ class ECGRecursiveProcessor:
             raise NotADirectoryError(f"Root path is not a directory: {self.root_path}")
     
 
-    def _find_hea_files(self) -> List[Path]:
-        """Recursively find all .hea files in the root directory."""
-        return list(self.root_path.rglob("*.hea"))
-    
-    
-    def _resolve_output_filename(self, hea_file_path: Path) -> str:
-        """
-        Resolve output filename, handling conflicts when necessary.
-        
-        Args:
-            hea_file_path: Path to the input .hea file
-            
-        Returns:
-            Unique output filename
-        """
-        base_filename = f"{hea_file_path.stem}.hea.npy"
-        output_filepath = self.output_path / base_filename
-        
-        # No conflict or skip_existing is True
-        if not output_filepath.exists() or self.skip_existing:
-            return base_filename
-        
-        # Resolve conflict using parent directory name
-        base_name = hea_file_path.stem
-        parent_name = hea_file_path.parent.name
-        
-        # Try with parent directory name
-        new_filename = f"{base_name}_{parent_name}.hea.npy"
-        if not (self.output_path / new_filename).exists():
-            logger.warning(f"Filename conflict resolved: {base_filename} -> {new_filename}")
-            return new_filename
-        
-        # Use counter if still conflicts
-        counter = 1
-        while (self.output_path / f"{base_name}_{parent_name}_{counter}.hea.npy").exists():
-            counter += 1
-        
-        final_filename = f"{base_name}_{parent_name}_{counter}.hea.npy"
-        logger.warning(f"Filename conflict resolved: {base_filename} -> {final_filename}")
-        return final_filename
-    
-
-    def _prepare_processing_tasks(self, hea_files: List[Path]) -> List[Tuple[Path, Path]]:
-        """
-        Prepare processing tasks from discovered files.
-        
-        Args:
-            hea_files: List of .hea file paths
-            
-        Returns:
-            List of (input_path, output_path) tuples for files to process
-        """
-        tasks = []
-        
-        for hea_file_path in hea_files:
-            output_filename = self._resolve_output_filename(hea_file_path)
-            output_filepath = self.output_path / output_filename
-            
-            # Skip if file exists and skip_existing is True
-            if self.skip_existing and output_filepath.exists():
-                continue
-            
-            tasks.append((hea_file_path, output_filepath))
-        
-        return tasks
-    
     def process_all_files(self) -> Dict[str, int]:
         """
         Process all .hea files found recursively using multiprocessing.
@@ -211,16 +145,14 @@ class ECGRecursiveProcessor:
                 - skipped: Number of skipped files
                 - total_found: Total files discovered
         """
-        logger.info("Discovering .hea files...")
-        hea_files = self._find_hea_files()
+        hea_files = list(self.root_path.rglob("*.hea"))
         total_files_found = len(hea_files)
-        
+
         if total_files_found == 0:
             logger.warning("No .hea files found in the directory structure")
             return {"processed": 0, "failed": 0, "skipped": 0, "total_found": 0}
         
         logger.info(f"Found {total_files_found} .hea files")
-        logger.info("Preparing processing tasks...")
         tasks = self._prepare_processing_tasks(hea_files)
         
         skipped_count = total_files_found - len(tasks)
@@ -241,6 +173,31 @@ class ECGRecursiveProcessor:
             logger.info(f"Skipping {skipped_count} files that already exist")
         
         return self._process_with_multiprocessing(tasks, skipped_count, total_files_found)
+    
+
+    def _prepare_processing_tasks(self, hea_files: List[Path]) -> List[Tuple[Path, Path]]:
+        """
+        Prepare processing tasks from discovered files.
+        
+        Args:
+            hea_files: List of .hea file paths
+            
+        Returns:
+            List of (input_path, output_path) tuples for files to process
+        """
+        tasks = []
+        
+        for hea_file_path in hea_files:
+            base_filename = f"{hea_file_path.stem}.hea.npy"
+            output_filepath = self.output_path / base_filename
+
+            # Skip if file exists and skip_existing is True
+            if self.skip_existing and output_filepath.exists():
+                continue
+            
+            tasks.append((hea_file_path, output_filepath))
+        
+        return tasks
     
 
     def _process_with_multiprocessing(
@@ -303,30 +260,6 @@ class ECGRecursiveProcessor:
         
         if len(failed_files) > 3:
             logger.error(f"  ... and {len(failed_files) - 3} more failures")
-    
-
-    def get_file_summary(self) -> Dict[str, Union[int, Dict[str, int]]]:
-        """
-        Get a summary of discovered files without processing.
-        
-        Returns:
-            Dictionary containing:
-                - total_files: Total number of .hea files found
-                - directories: Number of directories containing files
-                - files_per_directory: Mapping of directory paths to file counts
-        """
-        hea_files = self._find_hea_files()
-        
-        dir_counts = {}
-        for hea_file in hea_files:
-            parent_dir = str(hea_file.parent.relative_to(self.root_path))
-            dir_counts[parent_dir] = dir_counts.get(parent_dir, 0) + 1
-        
-        return {
-            "total_files": len(hea_files),
-            "directories": len(dir_counts),
-            "files_per_directory": dir_counts,
-        }
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -339,7 +272,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--root-path", type=Path, required=True, help="Root directory containing ECG dataset files")
     parser.add_argument("--output-path", type=Path, default=Path("./dataset"), help="Output directory for processed files")
     parser.add_argument("--n-processes", type=int, default=None, help="Number of processes for multiprocessing (defaults to CPU count)")
-    
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing output files (default: skip existing files)")
+
     return parser.parse_args()
 
 
@@ -347,31 +281,19 @@ def main() -> None:
     """Main execution function for ECG dataset processing."""
     args = parse_arguments()
     
-    try:
-        processor = ECGRecursiveProcessor(
-            root_path=args.root_path,
-            output_path=args.output_path,
-            skip_existing=True,
-            n_processes=args.n_processes,
-        )
-        
-        logger.info("Analyzing directory structure...")
-        summary = processor.get_file_summary()
-        
-        if summary["total_files"] == 0:
-            logger.warning("No .hea files found. Exiting.")
-            return
-        
-        stats = processor.process_all_files()
-        
-        if stats["failed"] > 0:
-            logger.warning(f"{stats['failed']} files failed processing")
-        
-        logger.info(f"\nAll processed files saved to: {args.output_path}")
-        
-    except Exception as e:
-        logger.error(f"Main execution failed: {e}")
-        sys.exit(1)
+    processor = ECGRecursiveProcessor(
+        root_path=args.root_path,
+        output_path=args.output_path,
+        skip_existing=not args.overwrite,
+        n_processes=args.n_processes,
+    )
+    
+    stats = processor.process_all_files()
+    
+    if stats["failed"] > 0:
+        logger.warning(f"{stats['failed']} files failed processing")
+    
+    logger.info(f"\nAll processed files saved to: {args.output_path}")
 
 
 if __name__ == "__main__":

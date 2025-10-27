@@ -261,7 +261,6 @@ class FeatureExtractionPipeline:
         )
 
         # Load model
-        #model = HuBERTModelLoader.load(self.args.hubert_path, self.device)
         logger.info("Loading HuBERT model...")
         checkpoint = torch.load(self.args.hubert_path, map_location='cpu', weights_only=False)
         model_config = checkpoint['model_config']
@@ -296,12 +295,12 @@ class FeatureExtractionPipeline:
         return dataframe.iloc[start_idx:end_idx]
 
 
-def main(args):
+def main():
     """Main entry point for feature extraction."""
+    args = create_dumping_parser()
     pipeline = FeatureExtractionPipeline(args)
     pipeline.run()
 
 
 if __name__ == "__main__":
-    args = create_dumping_parser()
-    main(args)
+    main()
