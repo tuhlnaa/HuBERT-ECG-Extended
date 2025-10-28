@@ -1,4 +1,21 @@
-"""K-means clustering for ECG feature learning using HuBERT-style approach."""
+"""
+K-Means Clustering Module for ECG Feature Learning
+
+This module provides functionality for performing k-means clustering on ECG 
+features using a HuBERT-style approach. It supports iterative clustering with 
+configurable cluster ranges, model checkpointing, and evaluation metrics 
+(Davies-Bouldin and Calinski-Harabasz scores).
+
+Usage:
+# Train clustering model
+python ./HuBert_ECG/kmeans_clustering.py /path/to/dataset.csv /path/to/features 1 32 --cluster --n_clusters_start 100 --n_clusters_end 500 --step 100
+
+# Resume training from checkpoint
+python ./HuBert_ECG/kmeans_clustering.py /path/to/dataset.csv /path/to/features 2 32 --cluster --n_clusters_start 100 --n_clusters_end 500 --step 100 --model_path kmeans_100_morphology_sse1e+06.pkl --layer 6
+
+# Evaluate trained model
+python ./HuBert_ECG/kmeans_clustering.py /path/to/dataset.csv /path/to/features 1 32 --model_path kmeans_500_morphology_sse8e+05.pkl
+"""
 
 import joblib
 import logging
@@ -95,6 +112,26 @@ def generate_model_filename(
     return f"{base_name}_sse{sse_str}.pkl"
 
 
+def load_and_normalize_features(
+    filenames: List[str],
+    feature_dir: Path,
+    normalizer: Normalizer
+) -> np.ndarray:
+    """Load features from files and normalize them.
+    
+    Args:
+        filenames: List of feature filenames to load
+        feature_dir: Directory containing feature files
+        normalizer: Normalizer for feature normalization (L2 norm)
+        
+    Returns:
+        Normalized feature array with shape (batch_size * NUM_ECG_TOKENS, n_features)
+    """
+    features = [np.load(feature_dir / filename) for filename in filenames]
+    features = np.concatenate(features, axis=0)
+    return normalizer.transform(features)
+
+
 def cluster(args) -> None:
     """Perform k-means clustering on ECG features.
     
@@ -154,26 +191,6 @@ def cluster(args) -> None:
         n_clusters += args.step
 
 
-def load_and_normalize_features(
-    filenames: List[str],
-    feature_dir: Path,
-    normalizer: Normalizer
-) -> np.ndarray:
-    """Load features from files and normalize them.
-    
-    Args:
-        filenames: List of feature filenames to load
-        feature_dir: Directory containing feature files
-        normalizer: Normalizer for feature normalization (L2 norm)
-        
-    Returns:
-        Normalized feature array with shape (batch_size * NUM_ECG_TOKENS, n_features)
-    """
-    features = [np.load(feature_dir / filename) for filename in filenames]
-    features = np.concatenate(features, axis=0)
-    return normalizer.transform(features)
-
-
 def evaluate_clustering(args) -> None:
     """Evaluate a trained clustering model using Davies-Bouldin and Calinski-Harabasz scores.
     
@@ -194,7 +211,7 @@ def evaluate_clustering(args) -> None:
         dataset,
         batch_size=args.batch_size,
         num_workers=0,
-        shuffle=False,  # No need to shuffle for evaluation
+        shuffle=False,
         pin_memory=True,
         drop_last=True
     )
@@ -230,8 +247,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-"""
-Average Davies-Bouldin score: 2.0157
-Average Calinski-Harabasz score: 62.3056
-"""
