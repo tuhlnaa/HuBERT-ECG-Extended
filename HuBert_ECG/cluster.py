@@ -1,22 +1,22 @@
+"""K-means clustering for ECG feature learning using HuBERT-style approach."""
+
 import joblib
 import logging
-import os
 import wandb
-
 import numpy as np
 
 from pathlib import Path
 from rich.logging import RichHandler
-from sklearn import preprocessing
 from sklearn.cluster import MiniBatchKMeans
+from sklearn.preprocessing import Normalizer
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from typing import Optional
-from sklearn.metrics import davies_bouldin_score, calinski_harabasz_score
+from sklearn.metrics import calinski_harabasz_score, davies_bouldin_score
+from typing import List, Optional
 
 # Import custom modules
-from dataset import ECGDataset
 from config import create_clustering_parser, init_seeds
+from dataset import ECGDataset
 
 # Constants
 NUM_ECG_TOKENS = 93  # Number of ECG embeddings/tokens before the Transformer
@@ -25,7 +25,7 @@ RANDOM_SEED = 42
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format="%(message)s", 
+    format="%(message)s",
     handlers=[RichHandler()]
 )
 logger = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 def create_kmeans_model(
     n_clusters: int,
     batch_size: int,
-    model_path: Optional[str] = None
+    model_path: Optional[Path] = None
 ) -> MiniBatchKMeans:
     """Create or load a MiniBatchKMeans model.
     
@@ -45,18 +45,16 @@ def create_kmeans_model(
         
     Returns:
         MiniBatchKMeans model instance
-        
-    Raises:
-        AssertionError: If loaded model has different number of clusters
     """
     if model_path is not None:
         logger.info(f"Loading pre-trained model from {model_path}")
         model = joblib.load(model_path)
         n_loaded_clusters = model.cluster_centers_.shape[0]
-        assert n_clusters == n_loaded_clusters, (
-            f"Resume clustering failed. Loaded model has {n_loaded_clusters} clusters, "
-            f"expected {n_clusters}"
-        )
+        if n_clusters != n_loaded_clusters:
+            raise ValueError(
+                f"Resume clustering failed. Loaded model has {n_loaded_clusters} "
+                f"clusters, expected {n_clusters}"
+            )
         return model
     
     logger.info("Creating clustering model from scratch")
@@ -89,12 +87,12 @@ def generate_model_filename(
         Model filename
     """
     if train_iteration == 1:
-        base_name = f"k_means_{n_clusters}_morphology"
+        base_name = f"kmeans_{n_clusters}_morphology"
     else:
-        base_name = f"k_means_{n_clusters}_encoder_{layer}_{train_iteration}"
+        base_name = f"kmeans_{n_clusters}_encoder_l{layer}_iter{train_iteration}"
     
     sse_str = f"{int(sse):e}"
-    return f"{base_name}_{sse_str}.pkl"
+    return f"{base_name}_sse{sse_str}.pkl"
 
 
 def cluster(args) -> None:
@@ -122,23 +120,25 @@ def cluster(args) -> None:
         drop_last=True
     )
     
-    normalizer = preprocessing.Normalizer()
+    normalizer = Normalizer()
+    feature_dir = Path(args.in_dir)
     n_clusters = args.n_clusters_start
     global_step = 0
     
-    # Resume from checkpoint only on first iteration
-    model_path = args.model_path if global_step == 0 else None
+    # Resume from checkpoint if provided
+    initial_model_path = Path(args.model_path) if args.model_path else None
     
     while n_clusters <= args.n_clusters_end:
         global_step += 1
         logger.info(f"Running k-means with {n_clusters} clusters...")
         
+        # Only load checkpoint for first clustering run
+        model_path = initial_model_path if global_step == 1 else None
         model = create_kmeans_model(n_clusters, args.batch_size, model_path)
-        model_path = None  # Only load once at start
         
         # Fitting loop
         for _, filenames in tqdm(dataloader, total=len(dataloader), desc=f"k={n_clusters}"):
-            features = load_and_normalize_features(filenames, args.in_dir, normalizer)
+            features = load_and_normalize_features(filenames, feature_dir, normalizer)
             model.partial_fit(features)
         
         # Log and save results
@@ -149,26 +149,27 @@ def cluster(args) -> None:
             n_clusters, args.train_iteration, args.layer, sse
         )
         joblib.dump(model, model_filename)
+        logger.info(f"Saved model to {model_filename}")
         
         n_clusters += args.step
 
 
 def load_and_normalize_features(
-    filenames: list[str], 
-    feature_dir: str, 
-    normalizer: preprocessing.Normalizer
+    filenames: List[str],
+    feature_dir: Path,
+    normalizer: Normalizer
 ) -> np.ndarray:
     """Load features from files and normalize them.
     
     Args:
         filenames: List of feature filenames to load
         feature_dir: Directory containing feature files
-        normalizer: Fitted normalizer for feature normalization
+        normalizer: Normalizer for feature normalization (L2 norm)
         
     Returns:
-        Normalized feature array, shape=(Batch size * 93, Number of features)
+        Normalized feature array with shape (batch_size * NUM_ECG_TOKENS, n_features)
     """
-    features = [np.load(os.path.join(feature_dir, filename)) for filename in filenames]
+    features = [np.load(feature_dir / filename) for filename in filenames]
     features = np.concatenate(features, axis=0)
     return normalizer.transform(features)
 
@@ -179,8 +180,8 @@ def evaluate_clustering(args) -> None:
     Args:
         args: Arguments from argument parser containing evaluation configuration
     """
-    model_name = Path(args.model_path).name
-    logger.info(f"Evaluating clustering model: {model_name}")
+    model_path = Path(args.model_path)
+    logger.info(f"Evaluating clustering model: {model_path.name}")
     
     dataset = ECGDataset(
         path_to_dataset_csv=args.path_to_dataset_csv,
@@ -193,30 +194,27 @@ def evaluate_clustering(args) -> None:
         dataset,
         batch_size=args.batch_size,
         num_workers=0,
-        shuffle=True,
+        shuffle=False,  # No need to shuffle for evaluation
         pin_memory=True,
         drop_last=True
     )
     
-    model = joblib.load(args.model_path)
-    normalizer = preprocessing.Normalizer()
+    model = joblib.load(model_path)
+    normalizer = Normalizer()
+    feature_dir = Path(args.in_dir)
     
     db_scores = []
     ch_scores = []
     
     for _, filenames in tqdm(dataloader, total=len(dataloader), desc="Evaluating"):
-        features = load_and_normalize_features(filenames, args.in_dir, normalizer)
-        print(features.shape)
+        features = load_and_normalize_features(filenames, feature_dir, normalizer)
         assignments = model.predict(features)
         
         db_scores.append(davies_bouldin_score(features, assignments))
         ch_scores.append(calinski_harabasz_score(features, assignments))
     
-    logger.info(f"Average Davies-Bouldin score: {np.mean(db_scores):.4f}")
-    logger.info(f"Average Calinski-Harabasz score: {np.mean(ch_scores):.4f}")
-
-    # Average Davies-Bouldin score: 2.0163889348431745
-    # Average Calinski-Harabasz score: 62.601320774361625
+    logger.info(f"Average Davies-Bouldin score: {np.mean(db_scores):.4f} (lower is better)")
+    logger.info(f"Average Calinski-Harabasz score: {np.mean(ch_scores):.4f} (higher is better)")
 
 
 def main() -> None:
@@ -232,3 +230,8 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+"""
+Average Davies-Bouldin score: 2.0157
+Average Calinski-Harabasz score: 62.3056
+"""

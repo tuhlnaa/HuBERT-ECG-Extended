@@ -14,7 +14,6 @@ from scipy import signal
 from scipy.fft import fft
 from typing import Dict, List, Optional, Tuple
 
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -22,6 +21,7 @@ logging.basicConfig(
     handlers=[RichHandler()]
 )
 logger = logging.getLogger(__name__)
+
 
 @dataclass
 class SamplingConfig:

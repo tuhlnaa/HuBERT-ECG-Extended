@@ -137,7 +137,7 @@ def finetune(args):
 
     device = torch.device('cuda')
     
-    wandb.init(project="my-project", group="supervised", entity=None)
+    wandb.init(project="HuBert ECG", group="supervised", entity=None)
 
     if args.wandb_run_name is not None:
         wandb.run.name = args.wandb_run_name
