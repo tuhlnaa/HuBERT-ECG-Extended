@@ -26,7 +26,8 @@ from pathlib import Path
 from rich.logging import RichHandler
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from typing import Optional, Tuple
+from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, BarColumn, TextColumn
+from typing import Dict, List, Optional, Tuple
 
 # Import custom modules
 PROJECT_ROOT = Path(__file__).parents[1]
@@ -34,8 +35,9 @@ sys.path.append(str(PROJECT_ROOT))
 
 from HuBert_ECG.config import create_dumping_parser, init_seeds
 from HuBert_ECG.dataset import ECGDataset
+from HuBert_ECG.ecg_features import Config, ECGDataProcessor, FeatureExtractorFactory
 from HuBert_ECG.hubert_ecg import HuBERTECG, HuBERTECGConfig
-from HuBert_ECG.ecg_features import ECGFeatureExtractor
+
 
 # Configure logging
 logging.basicConfig(
@@ -58,6 +60,178 @@ class ExtractionConfig:
     num_workers: int = 0
     save_metadata_csv: bool = False
     iteration_id: Optional[int] = None
+
+
+class ECGFeatureExtractor:
+    """Main class for extracting features from ECG records."""
+    
+    def __init__(self, device: torch.device = torch.device('cpu')):
+        self.device = device
+    
+    def should_skip_extraction(self, output_path: Path, feature_mode: str) -> bool:
+        """Check if feature extraction can be skipped."""
+        if not output_path.exists():
+            return False
+        
+        existing_features = np.load(output_path)
+        expected_dim = FeatureExtractorFactory.get_feature_dim(feature_mode)
+        return existing_features.shape[1] == expected_dim
+    
+
+    def validate_features(self, features: List, expected_n_shards: int, 
+                         feature_mode: str) -> None:
+        """Validate extracted features dimensions."""
+        expected_dim = FeatureExtractorFactory.get_feature_dim(feature_mode)
+        
+        assert len(features) == expected_n_shards, (
+            f"Expected {expected_n_shards} feature vectors, got {len(features)}"
+        )
+        assert len(features[0]) == expected_dim, (
+            f"Expected {expected_dim} features for mode '{feature_mode}', "
+            f"got {len(features[0])}"
+        )
+    
+
+    def extract_features(self, record, input_dir: Path, output_dir: Path,
+                        feature_mode: str, sample_rate: int, max_samples: int = 2500,
+                        base_sample_rate: int = 500) -> Optional[np.ndarray]:
+        """
+        Extract and save ECG signal features.
+        
+        Returns:
+            Extracted features array or None if skipped
+        """
+        filename = record.filename
+        input_path = input_dir / filename
+        output_path = output_dir / filename
+        
+        # Skip if features already exist with correct shape
+        if self.should_skip_extraction(output_path, feature_mode):
+            return None
+        
+        # Validate sampling rate
+        if sample_rate not in Config.SAMPLING:
+            error_msg = (
+                f"Unsupported sample_rate: {sample_rate}. "
+                f"Must be one of {list(Config.SAMPLING.keys())}"
+            )
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+        
+        config = Config.SAMPLING[sample_rate]
+        
+        # Load and preprocess data
+        processor = ECGDataProcessor(config, sample_rate, base_sample_rate)
+        data = processor.load_and_preprocess(input_path, max_samples, filename)
+        
+        if data is None:
+            logger.warning(f"Failed to load and preprocess data for {filename}")
+            return None
+        
+        # Process data into shards
+        shards = processor.process_to_shards(data)
+        
+        # Extract features from each shard
+        feature_extractor = FeatureExtractorFactory.create(
+            feature_mode, sample_rate, self.device
+        )
+        features = [feature_extractor.extract(shard) for shard in shards]
+        
+        # Validate output
+        expected_n_shards = (data.shape[0] * data.shape[1]) // config.compression_factor
+        self.validate_features(features, expected_n_shards, feature_mode)
+        
+        # Save features
+        features_array = np.array(features, dtype=np.float32)
+        np.save(output_path, features_array)
+        
+        return features_array
+        
+
+    def extract_batch(self, dataframe: pd.DataFrame, input_dir: Path, 
+                    output_dir: Path, feature_mode: str, sample_rate: int) -> Dict[str, int]:
+        """
+        Extract morphological features for all records in dataframe.
+        
+        Returns:
+            Dictionary with extraction statistics:
+                - processed: Number of successfully processed records
+                - failed: Number of failed records
+                - skipped: Number of skipped records
+                - total: Total records in dataframe
+        """
+        total_records = len(dataframe)
+        
+        if total_records == 0:
+            logger.warning("No records found in dataframe")
+            return {"processed": 0, "failed": 0, "skipped": 0, "total": 0}
+        
+        logger.info(f"Starting feature extraction for {total_records} records")
+        
+        processed_count = 0
+        failed_count = 0
+        skipped_count = 0
+        failed_records = []
+        
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("({task.completed}/{task.total})"),
+            TimeElapsedColumn(),
+        ) as progress:
+            
+            task_id = progress.add_task("[green]Extracting features", total=total_records)
+            
+            for record in dataframe.itertuples(index=False):
+                try:
+                    result = self.extract_features(
+                        record=record,
+                        input_dir=input_dir,
+                        output_dir=output_dir,
+                        feature_mode=feature_mode,
+                        sample_rate=sample_rate,
+                    )
+                    
+                    if result is None:
+                        skipped_count += 1
+                    else:
+                        processed_count += 1
+                        
+                except Exception as e:
+                    failed_count += 1
+                    error_msg = f"Failed to extract features for {record.filename}: {str(e)}"
+                    failed_records.append((record.filename, error_msg))
+                    logger.error(error_msg)
+                
+                progress.update(task_id, advance=1)
+        
+        self._log_failed_records(failed_records, failed_count)
+        
+        stats = {
+            "processed": processed_count,
+            "failed": failed_count,
+            "skipped": skipped_count,
+            "total": total_records,
+        }
+        
+        logger.info(f"Feature extraction complete: {stats}")
+        return stats
+
+
+    def _log_failed_records(self, failed_records: List[Tuple[str, str]], 
+                           failed_count: int) -> None:
+        """Log summary of failed records."""
+        if not failed_records:
+            return
+        
+        logger.error(f"{failed_count} records failed feature extraction:")
+        for filename, error_msg in failed_records[:3]:
+            logger.error(f"  {filename}: {error_msg}")
+        
+        if len(failed_records) > 3:
+            logger.error(f"  ... and {len(failed_records) - 3} more failures")
 
 
 class LatentFeatureExtractor:

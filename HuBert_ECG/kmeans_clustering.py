@@ -180,7 +180,7 @@ def cluster(args) -> None:
         
         # Log and save results
         sse = model.inertia_
-        wandb.log({"k": n_clusters, "SSE": sse}, step=global_step)
+        wandb.log({"k": n_clusters, "SSE": sse}, step=n_clusters)
         
         model_filename = generate_model_filename(
             n_clusters, args.train_iteration, args.layer, sse

@@ -121,7 +121,7 @@ def finetune(args):
         'task_name': "HuBERT-ECG finetune",  
         'task_type': "training",  # ClearML task type
         'reuse_last_task_id': False,  # ClearML task ID to resume or boolean flag
-        "tags": [args.task],  # List of tags for ClearML task
+        "tags": [args.task, "finetuning"],  # List of tags for ClearML task
     }
 
     # ClearML uses 1337 as the default initial seed

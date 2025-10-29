@@ -1,10 +1,8 @@
 import copy
-import random
 import torch
 import wandb
 
 import numpy as np
-import torch.cuda.amp as amp
 import torch.nn as nn
 import torch.optim as optim
 
@@ -14,34 +12,20 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import HubertConfig
 from transformers import get_linear_schedule_with_warmup
-from transformers.models.hubert.modeling_hubert import compute_mask_indices
+# from transformers.models.hubert.modeling_hubert import compute_mask_indices
 
 from torch.nn import functional as F
 
+# Import custom modules
 from dataset import ECGDataset
-from config import RichPrinter, create_training_parser
+from config import create_training_parser, init_seeds
 from hubert_ecg import HuBERTECG as HuBERT, HuBERTECGConfig
 
 EPS = 1E-09
 MINIMAL_IMPROVEMENT = 1e-3
 DROPOUT_ADJUSTMENT = 0.05
 WEIGHT_DECAY_MULTIPLIER = 5.0
-SELF_SUPERVISED_MODEL_CKPT_PATH = "/path/to/models/checkpoints/self-supervised/"
-
-# def dynamic_regularizer(optimizer, model, penalty):
-#     if penalty:
-#         # penalizing model with regularization but not too much
-#         optimizer.param_groups[0]['weight_decay'] *= 5
-#         for name, module in model.named_modules():
-#             if 'dropout' in name:
-#                 module.p += DROPOUT_ADJUSTMENT
-#     else:
-#         # unburdening model from regularization
-#         # minimum attainable weight decay is 0.01, dropout is 0.1
-#         optimizer.param_groups[0]['weight_decay'] = max(0.01, optimizer.param_groups[0]['weight_decay'] / 5)
-#         for name, module in model.named_modules():
-#             if 'dropout' in name:
-#                 module.p = max(0.1, module.p - DROPOUT_ADJUSTMENT)
+SELF_SUPERVISED_MODEL_CKPT_PATH = "output/checkpoints/self-supervised/"
         
 
 def dynamic_regularizer(
@@ -78,22 +62,15 @@ def dynamic_regularizer(
                 module.p = max(module.p - DROPOUT_ADJUSTMENT, 0.1)
 
 
-
 def train(args):
      
     device = torch.device('cuda')
     
     ### NOTE: comment for sweeps, uncomment for normal run ###
-    wandb.init(entity="my-entity", project="my-project", group="self-supervised")
+    wandb.init(project="HuBert ECG", group="self-supervised", entity=None)
 
     if args.wandb_run_name is not None:
         wandb.run.name = args.wandb_run_name
-
-    ### fixing seeds ###
-    torch.manual_seed(42)
-    torch.cuda.manual_seed(42)
-    np.random.seed(42)
-    random.seed(42)
 
     ### configs ###
     patience = args.patience if args.patience is not None else args.training_steps // args.val_interval
@@ -247,8 +224,8 @@ def train(args):
         )
         logger.info("Model built.")
         lr_scheduler = get_linear_schedule_with_warmup(optimizer=optimizer, num_warmup_steps=ceil(0.08*args.training_steps), num_training_steps=args.training_steps)
-
-    scaler = amp.GradScaler()
+    
+    scaler = torch.amp.GradScaler()
     
     # number of params
     logger.info(f"Number of parameters: {sum(p.numel() for p in hubert.parameters())}")
@@ -258,7 +235,8 @@ def train(args):
     
     train_set = ECGDataset(
         path_to_dataset_csv=args.path_to_dataset_csv_train,
-        ecg_dir_path="/data/ECG_AF/train_self_supervised",
+        #ecg_dir_path="/data/ECG_AF/train_self_supervised",
+        ecg_dir_path="output/PTB",
         downsampling_factor = args.downsampling_factor,
         features_path=args.train_features_path,
         kmeans_path = args.kmeans_path,
@@ -266,7 +244,8 @@ def train(args):
 
     val_set = ECGDataset(
         path_to_dataset_csv=args.path_to_dataset_csv_val,
-        ecg_dir_path="/data/ECG_AF/val_self_supervised",
+        #ecg_dir_path="/data/ECG_AF/val_self_supervised",
+        ecg_dir_path="output/PTB",
         features_path=args.val_features_path,
         downsampling_factor = args.downsampling_factor,
         kmeans_path = args.kmeans_path,
@@ -487,9 +466,9 @@ def train(args):
 
 def main() -> None:
     args = create_training_parser()
+    init_seeds(seed=42)
     train(args)
 
 
 if __name__ == "__main__":
-    """Create and configure argument parser."""
     main()
