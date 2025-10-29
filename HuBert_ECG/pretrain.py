@@ -1,6 +1,4 @@
-import argparse
 import copy
-import os
 import random
 import torch
 import wandb
@@ -21,7 +19,7 @@ from transformers.models.hubert.modeling_hubert import compute_mask_indices
 from torch.nn import functional as F
 
 from dataset import ECGDataset
-from config import RichPrinter
+from config import RichPrinter, create_training_parser
 from hubert_ecg import HuBERTECG as HuBERT, HuBERTECGConfig
 
 EPS = 1E-09
@@ -487,99 +485,11 @@ def train(args):
     wandb.finish()
 
 
+def main() -> None:
+    args = create_training_parser()
+    train(args)
+
+
 if __name__ == "__main__":
     """Create and configure argument parser."""
-    parser = argparse.ArgumentParser(description="Train Hubert-ECG")
-    
-    # Required arguments
-    required = parser.add_argument_group('required arguments')
-    required.add_argument("train_iteration", type=int, choices=[1, 2, 3], help="Hubert training iteration in {1, 2, 3}")
-    required.add_argument("path_to_dataset_csv_train", type=str, help="Path to the csv file containing the training dataset")
-    required.add_argument("path_to_dataset_csv_val", type=str, help="Path to the csv file containing the validation dataset")
-    required.add_argument("batch_size", type=int, help="Batch size")
-    required.add_argument("patience", type=int, help="Patience for early stopping")
-
-    # Pretraining-specific required arguments
-    required.add_argument("mask_time_prob", type=float, help="Probability of masking a time step in the input sequence")
-    required.add_argument("alpha", type=float, help="Alpha weight in the pretraining loss function")
-    required.add_argument("kmeans_path", type=str, help="Path to a file that contains paths to KMeans models")
-    required.add_argument("train_features_path", type=str, help="In case of pretraining or resumed pretraining, the path from which training features to cluster can be loaded")
-    required.add_argument("val_features_path", type=str, help="In case of pretraining or resumed pretraining, the path from which validation features to cluster can be loaded")
-    required.add_argument("vocab_sizes", type=int, nargs="+", help="Vocabulary sizes, i.e. num of labels/clusters per each task/clustering model")
-
-    # Training schedule (mutually exclusive)
-    schedule = parser.add_mutually_exclusive_group(required=True)
-    schedule.add_argument("--training_steps", type=int, help="Number of training steps to perform")
-    schedule.add_argument("--epochs", type=int, help="Number of epochs to perform")
-
-    # Model initialization (mutually exclusive)
-    init_group = parser.add_mutually_exclusive_group()
-    init_group.add_argument("--resume_pretraining", action="store_true", help="Whether to resume pretraining")
-
-    # General optional arguments
-    parser.add_argument("--accumulation_steps", type=int, default=1, help="Number of batch gradients to accumulate before updating model params")
-    parser.add_argument("--val_interval", type=int, help="Training steps to wait before validation. Required if training_steps is used")
-    parser.add_argument("--downsampling_factor", type=int, help="Downsampling factor to apply to the ECG signal")
-
-    # Model architecture
-    parser.add_argument("--load_path", type=str, help="Path to a model checkpoint to load for starting/resuming fine-tuning")
-    parser.add_argument("--largeness", type=str, choices=["small", "base", "large"], help="Model largeness in case of random initialization")
-
-    # Optimization
-    parser.add_argument("--lr", type=float, default=5e-5, help="Learning rate")
-    parser.add_argument("--weight_decay_mult", type=float, default=1.0, help="Weight decay multiplier. Default 1.0 (i.e. WD=0.01)")
-    parser.add_argument("--model_dropout_mult", type=float, default=0.0, help="Model dropout multiplier. Default 0.0 (i.e. dropout=0.1)")
-
-    # Regularization
-    parser.add_argument("--dynamic_reg", action="store_true", help="Whether to apply dynamic regularization to the model")
-    parser.add_argument("--intervals_for_penalty", type=int, default=4, help="Number of validation intervals with worsening performance before applying regularization")
-
-    # Logging
-    parser.add_argument("--wandb_run_name", type=str, help="The name to give to this run")
-
-    args = parser.parse_args()
-
-    # Print configuration
-    RichPrinter.print_config(args, "Configuration")
-    
-    if not torch.cuda.is_available():
-        logger.error("CUDA not available. CPU training not supported")
-        exit(1)
-    
-    if args.train_iteration > 3 or args.train_iteration < 1:
-        raise ValueError(f"Argument train_iteration must be an integer in [1, 3] range. Inserted {args.train_iteration}")
-    
-    if args.epochs is None and args.training_steps is None:
-        raise ValueError("Argument epochs or training_steps must be provided")
-    
-    if args.epochs is not None and args.training_steps is not None:
-        raise ValueError("Argument epochs and training_steps cannot be provided at the same time")
-    
-    if args.training_steps is not None and args.training_steps % args.val_interval != 0:
-        raise ValueError(f"Argument training_steps must be divisible by argument val_interval. Inserted {args.training_steps} and {args.val_interval}")
-    
-    if args.largeness not in ["base", "large", "small"]:
-        raise ValueError(f"Argument largeness must be in [base, large, x-large] range. Inserted {args.largeness}")
-    
-    if args.mask_time_prob <= 0.0 or args.mask_time_prob >= 1.0:
-        raise ValueError(f"Argument mask_time_prob must be a float in (0.0, 1.0) range. Inserted {args.mask_time_prob}")
-    
-    if args.alpha < 0.0 or args.alpha > 1.0:
-        raise ValueError(f"Argument alpha must be a float in [0.0, 1.0] and must provided if pretrain is provided. Inserted {args.alpha}")
-    
-    if not os.path.exists(args.kmeans_path):
-        raise ValueError(f"Argument kmeans_path must be a valid path. Inserted {args.kmeans_path}")
-    
-    if not os.path.exists(args.train_features_path):
-        raise ValueError(f"Argument train_features_path must be a valid path. Inserted {args.train_features_path}")
-    
-    if not os.path.exists(args.val_features_path):
-        raise ValueError(f"Argument val_features_path must be a valid path. Inserted {args.val_features_path}")
-
-    if args.resume_pretraining and args.load_path is None:
-        raise ValueError("Argument load_path must be provided is argument resume_pretraining is provided")
-
-    if args.accumulation_steps is not None and args.training_steps is not None and args.training_steps % args.accumulation_steps != 0:
-        raise ValueError("Argument training_steps must be divisible by argument accumulation_steps")
-
-    train(args)
+    main()

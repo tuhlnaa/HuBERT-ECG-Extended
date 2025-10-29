@@ -43,13 +43,13 @@ cd HuBERT-ECG-CGMH
 
 **Linux/Mac:**
 ```bash
-chmod +x ./scripts/install_dependencies.sh
-./scripts/install_dependencies.sh
+chmod +x ./script/install_dependencies.sh
+./script/install_dependencies.sh
 ```
 
 **Windows:**
 ```bash
-./scripts/install_dependencies.bat
+./script/install_dependencies.bat
 ```
 
 <br>
