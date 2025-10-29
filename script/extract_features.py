@@ -65,18 +65,9 @@ class ExtractionConfig:
 class ECGFeatureExtractor:
     """Main class for extracting features from ECG records."""
     
-    def __init__(self, device: torch.device = torch.device('cpu')):
+    def __init__(self, device: torch.device = torch.device('cpu'), skip_existing: bool = True):
         self.device = device
-    
-    def should_skip_extraction(self, output_path: Path, feature_mode: str) -> bool:
-        """Check if feature extraction can be skipped."""
-        if not output_path.exists():
-            return False
-        
-        existing_features = np.load(output_path)
-        expected_dim = FeatureExtractorFactory.get_feature_dim(feature_mode)
-        return existing_features.shape[1] == expected_dim
-    
+        self.skip_existing = skip_existing
 
     def validate_features(self, features: List, expected_n_shards: int, 
                          feature_mode: str) -> None:
@@ -105,10 +96,10 @@ class ECGFeatureExtractor:
         input_path = input_dir / filename
         output_path = output_dir / filename
         
-        # Skip if features already exist with correct shape
-        if self.should_skip_extraction(output_path, feature_mode):
+        # Skip if file exists and skip_existing is True
+        if self.skip_existing and output_path.exists():
             return None
-        
+
         # Validate sampling rate
         if sample_rate not in Config.SAMPLING:
             error_msg = (
@@ -392,6 +383,7 @@ class FeatureExtractionPipeline:
         self.input_dir = Path(args.in_dir)
         self.output_dir = Path(args.dest_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.skip_existing=not args.overwrite
     
     def run(self) -> None:
         """
@@ -417,7 +409,7 @@ class FeatureExtractionPipeline:
         dataframe = self._load_and_slice_dataframe()
         
         # Extract features
-        extractor = ECGFeatureExtractor(self.device)
+        extractor = ECGFeatureExtractor(self.device, self.skip_existing)
         extractor.extract_batch(
             dataframe=dataframe,
             input_dir=self.input_dir,

@@ -1,4 +1,6 @@
 import copy
+from dataclasses import dataclass
+from pathlib import Path
 import torch
 import wandb
 
@@ -62,16 +64,77 @@ def dynamic_regularizer(
                 module.p = max(module.p - DROPOUT_ADJUSTMENT, 0.1)
 
 
-def train(args):
-     
-    device = torch.device('cuda')
+@dataclass
+class TrainingConfig:
+    """Training hyperparameters configuration."""
+    patience: int
+    lr: float
+    betas: tuple[float, float]
+    weight_decay: float
+    accumulation_steps: int
+    mask_time_prob: float
+
+
+def _get_model_config(largeness: str) -> dict:
+    """Get model architecture configuration based on size variant.
     
-    ### NOTE: comment for sweeps, uncomment for normal run ###
-    wandb.init(project="HuBert ECG", group="self-supervised", entity=None)
+    Args:
+        largeness: Model size variant ('small', 'base', or 'large')
+        
+    Returns:
+        Dictionary containing model hyperparameters
+    """
+    MODEL_CONFIGS = {
+        'small': {
+            'hidden_size': 512,
+            'num_hidden_layers': 8,
+            'num_attention_heads': 8,
+            'intermediate_size': 2048,
+            'classifier_proj_size': 256,
+            'layerdrop': 0.1,
+        },
+        'base': {
+            'hidden_size': 768,
+            'num_hidden_layers': 12,
+            'num_attention_heads': 12,
+            'intermediate_size': 3072,
+            'classifier_proj_size': 256,
+            'layerdrop': 0.1,
+        },
+        'large': {
+            'hidden_size': 960,
+            'num_hidden_layers': 16,
+            'num_attention_heads': 12,
+            'intermediate_size': 3840,
+            'classifier_proj_size': 512,
+            'layerdrop': 0.0,
+        },
+    }
+    
+    if largeness not in MODEL_CONFIGS:
+        raise ValueError(
+            f"Model size '{largeness}' not supported. "
+            f"Choose from: {list(MODEL_CONFIGS.keys())}"
+        )
+    
+    return MODEL_CONFIGS[largeness]
 
-    if args.wandb_run_name is not None:
-        wandb.run.name = args.wandb_run_name
 
+def train(args):
+    # Device setup
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    # Initialize tracking
+    wandb.init(
+        project="HuBert ECG",
+        group="self-supervised",
+        entity=None,
+        name=args.wandb_run_name
+    )
+
+    # Get model configuration
+    model_config = _get_model_config(args.largeness)
+    
     ### configs ###
     patience = args.patience if args.patience is not None else args.training_steps // args.val_interval
     lr = args.lr
@@ -80,32 +143,56 @@ def train(args):
     accumulation_steps = args.accumulation_steps
     mask_time_prob = args.mask_time_prob
     
-    ### size model hyperparams ###
-    if args.largeness == "base":
-        hidden_size = 768
-        num_hidden_layers = 12
-        num_attention_heads = 12
-        intermediate_size = 3072    
-        classifier_proj_size = 256
-        layerdrop = 0.1
-    elif args.largeness == "large":
-        hidden_size = 960
-        num_hidden_layers = 16
-        num_attention_heads = 12
-        intermediate_size = 3840
-        classifier_proj_size = 512
-        layerdrop = 0.0
-    elif args.largeness == 'small': # small
-        hidden_size = 512
-        num_hidden_layers = 8
-        num_attention_heads = 8
-        intermediate_size = 2048
-        classifier_proj_size = 256
-        layerdrop = 0.1
-    else:
-        raise ValueError(f"Model largeness {args.largeness} not supported")
+    scaler = torch.amp.GradScaler()
     
+
+    ### START TRAINING ITERATION ###
+    
+    train_set = ECGDataset(
+        path_to_dataset_csv=args.path_to_dataset_csv_train,
+        #ecg_dir_path="/data/ECG_AF/train_self_supervised",
+        ecg_dir_path="output/PTB",
+        downsampling_factor = args.downsampling_factor,
+        features_path=args.train_features_path,
+        kmeans_path = args.kmeans_path,
+        )
+
+    val_set = ECGDataset(
+        path_to_dataset_csv=args.path_to_dataset_csv_val,
+        #ecg_dir_path="/data/ECG_AF/val_self_supervised",
+        ecg_dir_path="output/PTB",
+        features_path=args.val_features_path,
+        downsampling_factor = args.downsampling_factor,
+        kmeans_path = args.kmeans_path,
+        )
+    
+    assert len(args.vocab_sizes) == train_set.ensamble_length, f"len(vocab_sizes) must be equal to the number of tasks. Found {len(args.vocab_sizes)} and {train_set.ensamble_length} tasks"
+    for v, k in zip(args.vocab_sizes, train_set.ensamble_kmeans):
+        assert v == k.cluster_centers_.shape[0], f"vocab_sizes must be equal to the number of clusters in the kmeans models. Found {v} and {k.cluster_centers_.shape[0]} clusters"
         
+    
+    train_dl = DataLoader(
+        train_set,
+        collate_fn=train_set.collate,
+        num_workers=0,
+        batch_size=args.batch_size,
+        shuffle=True,
+        pin_memory=True
+        )
+
+    val_dl = DataLoader(
+        val_set,
+        collate_fn=val_set.collate,
+        num_workers=0,
+        batch_size=args.batch_size,
+        shuffle=False,
+        pin_memory=True
+        )
+
+    epochs = args.training_steps // (len(train_dl) // accumulation_steps) + 1 if args.training_steps is not None else args.epochs
+
+
+
     if args.resume_pretraining:
         hubert_name = args.load_path.split('/')[-1]
         logger.info(f"Loading checkpoint {hubert_name} to resume pretraining")
@@ -190,13 +277,13 @@ def train(args):
         config = HuBERTECGConfig(
             ensemble_length=len(args.vocab_sizes),
             vocab_sizes=args.vocab_sizes,
-            hidden_size = hidden_size,
-            num_hidden_layers = num_hidden_layers,
-            num_attention_heads = num_attention_heads,
-            intermediate_size = intermediate_size,
+            hidden_size = model_config["hidden_size"],
+            num_hidden_layers = model_config["num_hidden_layers"],
+            num_attention_heads = model_config["num_attention_heads"],
+            intermediate_size = model_config["intermediate_size"],
             mask_time_prob = mask_time_prob, 
-            classifier_proj_size = classifier_proj_size,
-            layerdrop = layerdrop,
+            classifier_proj_size = model_config["classifier_proj_size"],
+            layerdrop = model_config["layerdrop"],
             conv_kernel = conv_kernel,
             conv_stride = conv_stride,
             conv_dim = conv_dim,
@@ -225,57 +312,8 @@ def train(args):
         logger.info("Model built.")
         lr_scheduler = get_linear_schedule_with_warmup(optimizer=optimizer, num_warmup_steps=ceil(0.08*args.training_steps), num_training_steps=args.training_steps)
     
-    scaler = torch.amp.GradScaler()
-    
     # number of params
     logger.info(f"Number of parameters: {sum(p.numel() for p in hubert.parameters())}")
-    
-        
-    ### START TRAINING ITERATION ###
-    
-    train_set = ECGDataset(
-        path_to_dataset_csv=args.path_to_dataset_csv_train,
-        #ecg_dir_path="/data/ECG_AF/train_self_supervised",
-        ecg_dir_path="output/PTB",
-        downsampling_factor = args.downsampling_factor,
-        features_path=args.train_features_path,
-        kmeans_path = args.kmeans_path,
-        )
-
-    val_set = ECGDataset(
-        path_to_dataset_csv=args.path_to_dataset_csv_val,
-        #ecg_dir_path="/data/ECG_AF/val_self_supervised",
-        ecg_dir_path="output/PTB",
-        features_path=args.val_features_path,
-        downsampling_factor = args.downsampling_factor,
-        kmeans_path = args.kmeans_path,
-        )
-    
-    assert len(args.vocab_sizes) == train_set.ensamble_length, f"len(vocab_sizes) must be equal to the number of tasks. Found {len(args.vocab_sizes)} and {train_set.ensamble_length} tasks"
-    for v, k in zip(args.vocab_sizes, train_set.ensamble_kmeans):
-        assert v == k.cluster_centers_.shape[0], f"vocab_sizes must be equal to the number of clusters in the kmeans models. Found {v} and {k.cluster_centers_.shape[0]} clusters"
-        
-    
-    train_dl = DataLoader(
-        train_set,
-        collate_fn=train_set.collate,
-        num_workers=6,
-        batch_size=args.batch_size,
-        shuffle=True,
-        pin_memory=True
-        )
-
-    val_dl = DataLoader(
-        val_set,
-        collate_fn=val_set.collate,
-        num_workers=6,
-        batch_size=args.batch_size,
-        shuffle=False,
-        pin_memory=True
-        )
-
-    epochs = args.training_steps // (len(train_dl) // accumulation_steps) + 1 if args.training_steps is not None else args.epochs
-
     start_epoch = global_step // len(train_dl)
             
     for epoch in range(start_epoch, epochs):
@@ -393,9 +431,12 @@ def train(args):
                     f"train_loss_{args.train_iteration}" : train_loss,
                     f"val_loss_{args.train_iteration}" : val_loss,
                     "val_accuracy" : val_accuracy
-                })
+                }, step=global_step)
 
                 hubert.train()
+
+                checkpoint_path = Path(SELF_SUPERVISED_MODEL_CKPT_PATH)
+                checkpoint_path.mkdir(parents=True, exist_ok=True)
 
                 ### SAVE IF NEW BEST MODEL + EARLY STOPPING ###
                 if val_loss <= best_val_loss - MINIMAL_IMPROVEMENT: # if loss improves significantly, save checkpoint
@@ -416,7 +457,7 @@ def train(args):
                                 }
                     
                     checkpoint_name = f"hubert_{args.train_iteration}_iteration_{global_step}_{wandb.run.id}.pt"
-                    torch.save(checkpoint, SELF_SUPERVISED_MODEL_CKPT_PATH + checkpoint_name )
+                    #torch.save(checkpoint, checkpoint_path / checkpoint_name )
 
                     logger.info(f"New best (best_val_loss = {best_val_loss}) - model saved at step {global_step}")
                     
@@ -439,7 +480,7 @@ def train(args):
                     
                     checkpoint_name = f"hubert_{args.train_iteration}_iteration_{global_step}_{wandb.run.id}.pt"                                          
                     
-                    torch.save(checkpoint,  SELF_SUPERVISED_MODEL_CKPT_PATH + checkpoint_name)
+                    #torch.save(checkpoint, checkpoint_path / checkpoint_name)
                     logger.info(f"Val loss not improved but val accuracy did (best_val_accuracy = {best_val_accuracy}) - model saved at step {global_step}")   
                     
                     dynamic_regularizer(optimizer, hubert, penalty=False) if args.dynamic_reg else None # unburdening model from regularization

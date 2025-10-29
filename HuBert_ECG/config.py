@@ -298,6 +298,7 @@ def create_dumping_parser():
     parser.add_argument("--batch_size", type=int,default=1, help="Batch size to use when dumping latent features. Used only when train_iteration > 1")
     parser.add_argument("--output_layer", type=int, help="Output layer of HuBERT encoder from which to take latent features. Used only when train_iteration > 1")
     parser.add_argument("--save_csv_for_dumped_features", action="store_true", help="Whether to save a csv file containing references to dumped features. Helpful when clustering is the next step")
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing output files (default: skip existing files)")
     
     args = parser.parse_args()
     
