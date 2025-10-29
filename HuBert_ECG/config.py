@@ -469,6 +469,7 @@ def create_training_parser():
     # Required arguments
     required = parser.add_argument_group('required arguments')
     required.add_argument("train_iteration", type=int, choices=[1, 2, 3], help="Hubert training iteration in {1, 2, 3}")
+    required.add_argument("ecg_dir_path", type=str, help="Directory containing ECG data files")
     required.add_argument("path_to_dataset_csv_train", type=str, help="Path to the csv file containing the training dataset")
     required.add_argument("path_to_dataset_csv_val", type=str, help="Path to the csv file containing the validation dataset")
     required.add_argument("batch_size", type=int, help="Batch size")

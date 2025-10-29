@@ -109,13 +109,13 @@ def parse_args() -> argparse.Namespace:
 
     # Required arguments
     required = parser.add_argument_group("required arguments")
-    required.add_argument("train_csv", type=str, help="Path to training dataset CSV file",)
-    required.add_argument("val_csv", type=str, help="Path to validation dataset CSV file",)
-    required.add_argument("batch_size",type=int, help="Batch size for DataLoader",)
+    required.add_argument("train_csv", type=str, help="Path to training dataset CSV file")
+    required.add_argument("val_csv", type=str, help="Path to validation dataset CSV file")
+    required.add_argument("batch_size",type=int, help="Batch size for DataLoader")
 
     # Optional arguments
-    parser.add_argument("--ecg_dir", type=str, default="./output/PTB", help="Directory containing ECG data files",)
-    parser.add_argument("--downsample_factor", type=int, default=None, help="Downsampling factor for ECG signals",)
+    parser.add_argument("--ecg_dir", type=str, default="./output/PTB", help="Directory containing ECG data files")
+    parser.add_argument("--downsample_factor", type=int, default=None, help="Downsampling factor for ECG signals")
     parser.add_argument("--random_crop", action="store_true", help="Apply random 5-second crop augmentation")
     parser.add_argument("--label_start_idx", type=int, default=3, help="Starting column index for labels in CSV")
     parser.add_argument("--num_batches", type=int, default=1, help="Number of batches to display for testing")
