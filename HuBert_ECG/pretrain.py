@@ -445,70 +445,71 @@ def train(args):
 
                 checkpoint_path = Path(SELF_SUPERVISED_MODEL_CKPT_PATH)
                 checkpoint_path.mkdir(parents=True, exist_ok=True)
-
-                ### SAVE IF NEW BEST MODEL + EARLY STOPPING ###
-                if val_loss <= best_val_loss - MINIMAL_IMPROVEMENT: # if loss improves significantly, save checkpoint
+                            
+                # Save if new best model + Early stopping
+                loss_improved = val_loss <= best_val_loss - MINIMAL_IMPROVEMENT
+                accuracy_improved = val_accuracy >= best_val_accuracy + MINIMAL_IMPROVEMENT
+                
+                if loss_improved or accuracy_improved:
+                    # Update best metrics
+                    if loss_improved:
+                        best_val_loss = val_loss
+                        best_val_accuracy = max(val_accuracy, best_val_accuracy)
+                        patience_count = 0
+                        logger.info(
+                            f"New best (best_val_loss={best_val_loss:.4f}) - "
+                            f"model saved at step {global_step}"
+                        )
+                    else:  # accuracy_improved only
+                        best_val_accuracy = val_accuracy
+                        logger.info(
+                            f"Val loss not improved but val accuracy did "
+                            f"(best_val_accuracy={best_val_accuracy:.4f}) - "
+                            f"model saved at step {global_step}"
+                        )
                     
-                    best_val_loss = val_loss
-                    best_val_accuracy = val_accuracy if val_accuracy > best_val_accuracy else best_val_accuracy
-                    patience_count = 0 
+                    # Create checkpoint
                     checkpoint = {
-                                    "global_step" : global_step,
-                                    "patience_count" : patience_count,
-                                    "model_config" : hubert.config,
-                                    "model_state_dict" : copy.deepcopy(hubert.state_dict()),
-                                    "optimizer_state_dict" : copy.deepcopy(optimizer.state_dict()),
-                                    "best_val_loss" : best_val_loss,
-                                    "lr_scheduler_state_dict" : copy.deepcopy(lr_scheduler.state_dict()),
-                                    "best_val_accuracy" : best_val_accuracy,
-                                    "pretraining_vocab_sizes" : args.vocab_sizes,
-                                }
+                        "global_step": global_step,
+                        "patience_count": patience_count,
+                        "model_config": hubert.config,
+                        "model_state_dict": copy.deepcopy(hubert.state_dict()),
+                        "optimizer_state_dict": copy.deepcopy(optimizer.state_dict()),
+                        "lr_scheduler_state_dict": copy.deepcopy(lr_scheduler.state_dict()),
+                        "best_val_loss": best_val_loss,
+                        "best_val_accuracy": best_val_accuracy,
+                        "pretraining_vocab_sizes": args.vocab_sizes,
+                    }
                     
-                    checkpoint_name = f"hubert_{args.train_iteration}_iteration_{global_step}_{wandb.run.id}.pt"
-                    #torch.save(checkpoint, checkpoint_path / checkpoint_name )
-
-                    logger.info(f"New best (best_val_loss = {best_val_loss}) - model saved at step {global_step}")
-                    # Dynamically adjust regularization strength based on training conditions.
-                    dynamic_regularizer(optimizer, hubert, penalty=False) if args.dynamic_reg else None # unburdening model from regularization
-
-                elif val_accuracy >= best_val_accuracy + MINIMAL_IMPROVEMENT: # if loss doesn't improve significantly but accuracy does, save checkpoint anyway
+                    checkpoint_name = (
+                        f"hubert_{args.train_iteration}_iteration_"
+                        f"{global_step}_{wandb.run.id}.pt"
+                    )
+                    # torch.save(checkpoint, checkpoint_path / checkpoint_name)
                     
-                    best_val_accuracy = val_accuracy
-                    checkpoint = {
-                                    "global_step" : global_step,
-                                    "patience_count" : patience_count,
-                                    "model_config" : hubert.config,
-                                    "model_state_dict" : copy.deepcopy(hubert.state_dict()),
-                                    "optimizer_state_dict" : copy.deepcopy(optimizer.state_dict()),
-                                    "best_val_loss" : best_val_loss,
-                                    "lr_scheduler_state_dict" : copy.deepcopy(lr_scheduler.state_dict()),
-                                    "best_val_accuracy" : best_val_accuracy,
-                                    "pretraining_vocab_sizes" : args.vocab_sizes,
-                                }
-                    
-                    checkpoint_name = f"hubert_{args.train_iteration}_iteration_{global_step}_{wandb.run.id}.pt"                                          
-                    
-                    #torch.save(checkpoint, checkpoint_path / checkpoint_name)
-                    logger.info(f"Val loss not improved but val accuracy did (best_val_accuracy = {best_val_accuracy}) - model saved at step {global_step}")   
-                    # Dynamically adjust regularization strength based on training conditions.
-                    dynamic_regularizer(optimizer, hubert, penalty=False) if args.dynamic_reg else None # unburdening model from regularization
-                    
-                else: #worsening performance
+                    # Reduce regularization after improvement
+                    if args.dynamic_reg:
+                        dynamic_regularizer(optimizer, hubert, penalty=False)
+                
+                else:  # No improvement
                     patience_count += 1
-                     
-                    if args.dynamic_reg and patience_count % (patience // args.intervals_for_penalty) == 0 and patience_count != patience:
-                        # Dynamically adjust regularization strength based on training conditions.
-                        dynamic_regularizer(optimizer, hubert, penalty=True) # penalizing model with regularization
                     
-                    if patience_count == patience:
-                        logger.warning(f"EARLY STOPPING: Max num of val intervals with no improvement reached at {global_step}")
-                        logger.info(f"patience_count: {patience_count}")
+                    # Apply regularization penalty at intervals
+                    if args.dynamic_reg and patience_count != patience:
+                        if patience_count % (patience // args.intervals_for_penalty) == 0:
+                            dynamic_regularizer(optimizer, hubert, penalty=True)
+                    
+                    # Early stopping
+                    if patience_count >= patience:
+                        logger.warning(
+                            f"EARLY STOPPING: Max patience reached at step {global_step} "
+                            f"(patience_count={patience_count})"
+                        )
                         return
-                    
 
-    ### END OF TRAINING ITERATION ###
+    # End of training iteration
     logger.info("End of training")
-    logger.info(f"STATS: Global step={global_step}, Best val loss={best_val_loss}")
+    logger.info(f"STATS: Global step={global_step}, Best val loss={best_val_loss:.4f}")
     wandb.finish()
 
 

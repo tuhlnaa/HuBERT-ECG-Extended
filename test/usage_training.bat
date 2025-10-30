@@ -8,8 +8,8 @@ rem More useful information available with: python train.py --help
 rem Configuration - Required Parameters
 set "TRAIN_ITERATION=1"
 set "ECG_DIR_PATH=output/PTB"
-set "TRAIN_CSV=reproducibility/ptb/ptb_train_0.csv"
-set "VAL_CSV=reproducibility/ptb/ptb_test_0.csv"
+set "TRAIN_CSV=data/label/ptb/ptb_train_0.csv"
+set "VAL_CSV=data/label/ptb/ptb_test_0.csv"
 set "BATCH_SIZE=16"
 set "PATIENCE=10"
 
