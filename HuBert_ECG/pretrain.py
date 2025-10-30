@@ -171,7 +171,6 @@ def validate_model(model, val_loader, device, logger, global_step):
             )
             ensemble_logits = model.logits(encoder_output['last_hidden_state'])
 
-            # labels: (batch_size, sequence_length), logits: (batch_size, sequence_length, vocab_size)
             assert len(ensemble_labels) == len(ensemble_logits), f"VAL! len(ensamble_labels) must be equal to len(ensamble_logits). Found {len(ensemble_labels)} and {len(ensemble_logits)}"
 
             # Compute loss and accuracy across ensemble
@@ -179,6 +178,7 @@ def validate_model(model, val_loader, device, logger, global_step):
             batch_accuracy = 0
 
             for labels, logits in zip(ensemble_labels, ensemble_logits):
+                # labels: (batch_size, seq_len), logits: (batch_size, seq_len, vocab_size)
                 logits_transposed = logits.transpose(1, 2)
                 batch_loss += F.cross_entropy(logits_transposed, labels)
                 batch_accuracy += (logits_transposed.argmax(dim=1) == labels).float().mean()
@@ -372,55 +372,54 @@ def train(args):
     start_epoch = global_step // len(train_loader)
 
     for epoch in range(start_epoch, epochs):
-
         hubert.train()
         logger.info(f"Epoch {epoch+1}/{epochs}")
 
         train_losses = []
         
         for ecg, attention_mask, ensemble_labels in tqdm(train_loader, total=len(train_loader)):
-
             global_step += 1
             
+            # Move data to device
             ecg = ecg.to(device) 
             attention_mask = attention_mask.to(device)
             ensemble_labels = ensemble_labels.to(device)
             
-            #logger.info("Mapped data to device")
-
-            #with amp.autocast():
             with torch.amp.autocast('cuda'):
-               
-                out_encoder_dict = hubert(ecg, attention_mask=attention_mask, output_attentions=False, output_hidden_states=False, return_dict=True)
-                #logger.info("Computed encodings")
+                # Forward pass
+                encoder_output = hubert(
+                    ecg, 
+                    attention_mask=attention_mask, 
+                    output_attentions=False, 
+                    output_hidden_states=False, 
+                    return_dict=True
+                )
+                
+                mask = encoder_output['mask_time_indices']
+                ensemble_logits = hubert.logits(encoder_output['last_hidden_state'])
 
-                mask = out_encoder_dict['mask_time_indices']
+                # Compute ensemble loss
+                ensemble_labels = ensemble_labels.transpose(0, 1)
                 
-                ensemble_logits = hubert.logits(out_encoder_dict['last_hidden_state'])
-                #logger.info("Computed logits")
-                                
-                # modify loss computation to enable ensamble loss (sum of losses)                
-                ensemble_labels = ensemble_labels.transpose(0, 1) 
-                
-                masked_loss = 0
-                unmasked_loss = 0
-                
-                assert len(ensemble_labels) == len(ensemble_logits), f"len(ensamble_labels) must be equal to len(ensamble_logits). Found {len(ensemble_labels)} and {len(ensemble_logits)}"
-                
+                # Vectorized loss computation
+                masked_losses = []
+                unmasked_losses = []
+
                 for labels, logits in zip(ensemble_labels, ensemble_logits):
-                    # labels is (BS, F), logits is (BS, F, V)
-                    masked_loss += F.cross_entropy(logits[mask], labels[mask])
-                    unmasked_loss += F.cross_entropy(logits[~mask], labels[~mask])
-                    #logger.info("Computed masked and unmasked losses per task")
-                    
-                loss = args.alpha * masked_loss +  (1 - args.alpha) * unmasked_loss
+                    # labels: (batch_size, seq_len), logits: (batch_size, seq_len, vocab_size)
+                    masked_losses.append(F.cross_entropy(logits[mask], labels[mask]))
+                    unmasked_losses.append(F.cross_entropy(logits[~mask], labels[~mask]))
+                
+                masked_loss = sum(masked_losses)
+                unmasked_loss = sum(unmasked_losses)
+                
+                loss = args.alpha * masked_loss + (1 - args.alpha) * unmasked_loss
                 loss = loss / accumulation_steps
-                       
+            
+            # Backward pass with gradient scaling
             scaler.scale(loss).backward()
             train_losses.append(loss.item())
-            
-            #logger.info("Accumulated scaled loss")
-            
+
             # Gradient accumulation
             if global_step % accumulation_steps == 0:
                 scaler.step(optimizer)
