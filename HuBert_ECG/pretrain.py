@@ -38,6 +38,10 @@ DROPOUT_ADJUSTMENT = 0.05
 WEIGHT_DECAY_MULTIPLIER = 5.0
 SELF_SUPERVISED_MODEL_CKPT_PATH = "output/checkpoints/self-supervised/"
         
+# Constants
+WARMUP_RATIO = 0.08
+DROPOUT_RESET_VALUE = 0.1
+MIN_WEIGHT_DECAY = 0.01
 
 def dynamic_regularizer(
     optimizer: torch.optim.Optimizer,
@@ -191,6 +195,193 @@ def validate_model(model, val_loader, device, logger, global_step):
     return np.mean(val_losses), np.mean(val_accuracies)
 
 
+def _resume_from_checkpoint(args, device):
+    """Load model and training state from checkpoint."""
+    checkpoint_name = args.load_path.split('/')[-1]
+    logger.info(f"Loading checkpoint {checkpoint_name} to resume pretraining")
+    
+    checkpoint = torch.load(args.load_path, map_location=torch.device('cpu'), weights_only=False)
+    
+    # Validate checkpoint
+    assert checkpoint['pretraining_vocab_sizes'] == args.vocab_sizes, \
+        "Vocab sizes mismatch between checkpoint and args"
+
+    # # Create config
+    # config = _create_config_from_checkpoint(checkpoint, args.vocab_sizes)
+    config = checkpoint['model_config']
+
+    # Initialize and load model
+    model = HuBERT(config)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    
+    previous_iteration = int(checkpoint_name.split('_')[1])
+    is_same_iteration = (args.train_iteration == previous_iteration)
+    
+    # Handle iteration switch
+    if not is_same_iteration:
+        logger.info("Switching to another pretraining iteration: "
+                   "reinitializing label embedding and restoring dropouts...")
+        _reset_label_embedding(model, args.vocab_sizes)
+        _reset_encoder_dropouts(model, DROPOUT_RESET_VALUE)
+    
+    model.to(device)
+    
+    # Prepare training state
+    training_state = {
+        'global_step': checkpoint['global_step'] if is_same_iteration else 0,
+        'best_val_loss': checkpoint['best_val_loss'] if is_same_iteration else float('inf'),
+        'patience_count': checkpoint['patience_count'] if is_same_iteration else 0,
+        'best_val_accuracy': checkpoint['best_val_accuracy'] if is_same_iteration else 0.0,
+        'is_same_iteration': is_same_iteration,
+        'optimizer_state': checkpoint.get('optimizer_state_dict'),
+        'lr_scheduler_state': checkpoint.get('lr_scheduler_state_dict') if is_same_iteration else None
+    }
+    
+    logger.info("Checkpoint loaded.")
+    return model, training_state
+
+
+def _initialize_model_from_scratch(args, model_config, mask_time_prob, device):
+    """Initialize model from scratch with given configuration."""
+    logger.info("Building a model from zero to start training...")
+    
+    conv_configs = _get_conv_config(args.downsampling_factor)
+    
+    config = HuBERTECGConfig(
+        ensemble_length=len(args.vocab_sizes),
+        vocab_sizes=args.vocab_sizes,
+        hidden_size=model_config["hidden_size"],
+        num_hidden_layers=model_config["num_hidden_layers"],
+        num_attention_heads=model_config["num_attention_heads"],
+        intermediate_size=model_config["intermediate_size"],
+        mask_time_prob=mask_time_prob,
+        classifier_proj_size=model_config["classifier_proj_size"],
+        layerdrop=model_config["layerdrop"],
+        mask_time_length=1,
+        hidden_dropout=max(0, 0.1 + DROPOUT_ADJUSTMENT * args.model_dropout_mult),
+        activation_dropout=max(0, 0.1 + DROPOUT_ADJUSTMENT * args.model_dropout_mult),
+        attention_dropout=max(0, 0.1 + DROPOUT_ADJUSTMENT * args.model_dropout_mult),
+        feat_proj_dropout=max(0, 0 + DROPOUT_ADJUSTMENT * args.model_dropout_mult),
+        final_dropout=max(0, 0.1 + DROPOUT_ADJUSTMENT * args.model_dropout_mult),
+        **conv_configs
+    )
+
+    # model = nn.DataParallel(model)
+    model = HuBERT(config)
+    model.to(device)
+    
+    training_state = {
+        'global_step': 0,
+        'best_val_loss': float('inf'),
+        'best_val_accuracy': 0.0,
+        'patience_count': 0,
+        'is_same_iteration': False,
+        'optimizer_state': None,
+        'lr_scheduler_state': None
+    }
+    
+    logger.info("Model built.")
+    return model, training_state
+
+
+def _get_conv_config(downsampling_factor):
+    """Get convolutional layer configuration based on downsampling factor."""
+    configs = {
+        None: {
+            'conv_kernel': (10, 3, 3, 3, 3, 2, 2),
+            'conv_stride': (5, 2, 2, 2, 2, 2, 2),
+            'conv_dim': (512, 512, 512, 512, 512, 512, 512)
+        },
+        5: {
+            'conv_kernel': (10, 3, 3, 2, 2),
+            'conv_stride': (4, 2, 2, 2, 2),
+            'conv_dim': (512, 512, 512, 512, 512)
+        },
+        10: {
+            'conv_kernel': (10, 3, 3, 2),
+            'conv_stride': (4, 2, 2, 2),
+            'conv_dim': (512, 512, 512, 512)
+        }
+    }
+    
+    if downsampling_factor not in configs:
+        raise ValueError(f"Downsampling factor {downsampling_factor} not supported. "
+                        f"Supported values: {list(configs.keys())}")
+    
+    return configs[downsampling_factor]
+
+
+def _create_config_from_checkpoint(checkpoint, vocab_sizes):
+    """Create appropriate config from checkpoint."""
+    config = checkpoint['model_config']
+    
+    if isinstance(config, HubertConfig):
+        config = HuBERTECGConfig(
+            ensemble=len(checkpoint['pretraining_vocab_sizes']),
+            vocab_sizes=checkpoint['pretraining_vocab_sizes'],
+            **config.to_dict()
+        )
+    return config
+
+
+def _reset_label_embedding(model, vocab_sizes):
+    """Reinitialize label embeddings for new training iteration."""
+    model.label_embedding = nn.ModuleList([
+        nn.Embedding(vocab_size, model.config.classifier_proj_size)
+        for vocab_size in vocab_sizes
+    ])
+
+
+def _reset_encoder_dropouts(model, dropout_value):
+    """Reset dropout rates for encoder layers."""
+    for name, module in model.named_modules():
+        if 'dropout' in name and 'encoder.layers' in name:
+            module.p = dropout_value
+
+
+def _ensure_min_dropout(model, min_dropout):
+    """Ensure all dropout modules have at least the minimum dropout rate."""
+    for name, module in model.named_modules():
+        if 'dropout' in name:
+            module.p = max(min_dropout, module.p)
+
+
+def _create_optimizer(model, lr, betas, weight_decay):
+    """Create AdamW optimizer with specified parameters."""
+    return optim.AdamW(
+        model.parameters(),
+        lr=lr,
+        betas=betas,
+        eps=EPS,
+        weight_decay=weight_decay
+    )
+
+
+def _create_lr_scheduler(optimizer, total_steps, warmup_ratio, 
+                         current_step=0, previous_state=None):
+    """Create learning rate scheduler with warmup."""
+    num_warmup_steps = ceil(warmup_ratio * total_steps)
+    
+    if previous_state is not None:
+        # Resume from previous scheduler state
+        scheduler = get_linear_schedule_with_warmup(
+            optimizer=optimizer,
+            num_warmup_steps=num_warmup_steps - current_step,
+            num_training_steps=total_steps,
+            last_epoch=previous_state['last_epoch'] - 1
+        )
+        scheduler.load_state_dict(previous_state)
+    else:
+        # Create new scheduler
+        scheduler = get_linear_schedule_with_warmup(
+            optimizer=optimizer,
+            num_warmup_steps=num_warmup_steps,
+            num_training_steps=total_steps
+        )
+    
+    return scheduler
+
+
 def train(args):
     # Device setup
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -248,127 +439,35 @@ def train(args):
     else:
         epochs = args.epochs
 
+
+
     if args.resume_pretraining:
-        hubert_name = args.load_path.split('/')[-1]
-        logger.info(f"Loading checkpoint {hubert_name} to resume pretraining")
-        
-        checkpoint = torch.load(args.load_path, map_location = torch.device('cpu'))
-
-        config = checkpoint['model_config']
-        assert checkpoint['pretraining_vocab_sizes'] == args.vocab_sizes
-        if type(config) == HubertConfig:
-            config = HuBERTECGConfig(ensemble=len(checkpoint['pretraining_vocab_sizes']), vocab_sizes=checkpoint['pretraining_vocab_sizes'], **config.to_dict())
-       
-        hubert = HuBERT(config)
-        hubert.load_state_dict(checkpoint['model_state_dict'])
-
-        previous_iteration = int(hubert_name.split('_')[1])
-
-        if args.train_iteration != previous_iteration: #when switching to subsequent training iterations
-            logger.info("Switching to another pretraining iteration: changing label embedding and restoring dropouts...")
-            hubert.label_embedding = nn.ModuleList(nn.Embedding(vocab_size, hubert.config.classifier_proj_size) for vocab_size in args.vocab_sizes)
-            
-            for name, module in hubert.named_modules():
-                if 'dropout' in name and 'encoder.layers' in name:
-                    module.p = 0.1 # restoring p drop
-                    
-        # hubert = nn.DataParallel(hubert)
-        hubert.to(device)
-        global_step = checkpoint['global_step'] if args.train_iteration == previous_iteration else 0 
-        best_val_loss = checkpoint['best_val_loss'] if args.train_iteration == previous_iteration else float('inf')
-        patience_count = checkpoint['patience_count'] if args.train_iteration == previous_iteration else 0
-        best_val_accuracy = checkpoint['best_val_accuracy'] if args.train_iteration == previous_iteration else 0
-        
-        optimizer = optim.AdamW(
-            hubert.parameters(),
-            lr=lr,
-            betas=betas,
-            eps=EPS,
-            weight_decay=weight_decay,
-        )
-        
-        if args.train_iteration == previous_iteration: #don't load state dict when switching to subsequent train iterations
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            optimizer.param_groups[0]['weight_decay'] = max(0.01, optimizer.param_groups[0]['weight_decay'])
-            for name, module in hubert.named_modules():
-                if 'dropout' in name:
-                    module.p = max(0.1, module.p)
-        
-        if args.train_iteration == previous_iteration:
-            lr_scheduler = get_linear_schedule_with_warmup(
-               optimizer=optimizer,
-               num_warmup_steps=ceil(0.08*args.training_steps  - global_step),
-               num_training_steps=args.training_steps,
-               last_epoch=checkpoint['lr_scheduler_state_dict']['last_epoch']-1
-            )
-            lr_scheduler.load_state_dict(checkpoint['lr_scheduler_state_dict'])
-        else:
-            lr_scheduler = get_linear_schedule_with_warmup(
-                optimizer=optimizer,
-                num_warmup_steps=ceil(0.08*args.training_steps),
-                num_training_steps=args.training_steps
-            )
-        
-        logger.info("Checkpoint loaded.")
+        model, training_state = _resume_from_checkpoint(args, device)
     else:
-        logger.info("Building a model from zero to start training...")
-        
-        if args.downsampling_factor is None:
-            conv_kernel = (10, 3, 3, 3, 3, 2, 2)
-            conv_stride = (5, 2, 2, 2, 2, 2, 2)
-            conv_dim = (512, 512, 512, 512, 512, 512, 512)   
-        elif args.downsampling_factor == 5: 
-            conv_kernel = (10, 3, 3, 2, 2)
-            conv_stride = (4, 2, 2, 2, 2)
-            conv_dim = (512, 512, 512, 512, 512)
-        elif args.downsampling_factor == 10:
-            conv_kernel = (10, 3, 3, 2)
-            conv_stride = (4, 2, 2, 2)
-            conv_dim = (512, 512, 512, 512)
-        else:
-            raise ValueError(f"Downsampling factor {args.downsampling_factor} not supported")           
-            
-                
-        config = HuBERTECGConfig(
-            ensemble_length=len(args.vocab_sizes),
-            vocab_sizes=args.vocab_sizes,
-            hidden_size = model_config["hidden_size"],
-            num_hidden_layers = model_config["num_hidden_layers"],
-            num_attention_heads = model_config["num_attention_heads"],
-            intermediate_size = model_config["intermediate_size"],
-            mask_time_prob = mask_time_prob, 
-            classifier_proj_size = model_config["classifier_proj_size"],
-            layerdrop = model_config["layerdrop"],
-            conv_kernel = conv_kernel,
-            conv_stride = conv_stride,
-            conv_dim = conv_dim,
-            mask_time_length = 1,
-            hidden_dropout=max(0, 0.1 + DROPOUT_ADJUSTMENT * args.model_dropout_mult),
-            activation_dropout=max(0, 0.1 + DROPOUT_ADJUSTMENT * args.model_dropout_mult),
-            attention_dropout=max(0, 0.1 + DROPOUT_ADJUSTMENT * args.model_dropout_mult),
-            feat_proj_dropout=max(0, 0 + DROPOUT_ADJUSTMENT * args.model_dropout_mult),
-            final_dropout=max(0, 0.1 + DROPOUT_ADJUSTMENT * args.model_dropout_mult),    
-        ) # + other default params
-        
-        hubert = HuBERT(config)
-        # hubert = nn.DataParallel(hubert)
-        hubert.to(device)
-        global_step = 0
-        best_val_loss = float("inf")
-        best_val_accuracy = 0.0
-        patience_count = 0        
-        optimizer = optim.AdamW(
-            hubert.parameters(),
-            lr=lr,
-            betas=betas,
-            eps=EPS,
-            weight_decay=weight_decay,
-        )
-        logger.info("Model built.")
-        lr_scheduler = get_linear_schedule_with_warmup(optimizer=optimizer, num_warmup_steps=ceil(0.08*args.training_steps), num_training_steps=args.training_steps)
+        model, training_state = _initialize_model_from_scratch(args, model_config, mask_time_prob, device)
     
-    # number of params
-    logger.info(f"Number of parameters: {sum(p.numel() for p in hubert.parameters())}")
+    optimizer = _create_optimizer(model, lr, betas, weight_decay)
+    
+    if args.resume_pretraining and training_state['is_same_iteration']:
+        optimizer.load_state_dict(training_state['optimizer_state'])
+        optimizer.param_groups[0]['weight_decay'] = max(MIN_WEIGHT_DECAY, 
+                                                         optimizer.param_groups[0]['weight_decay'])
+        _ensure_min_dropout(model, DROPOUT_RESET_VALUE)
+    
+    lr_scheduler = _create_lr_scheduler(
+        optimizer, 
+        args.training_steps, 
+        WARMUP_RATIO,
+        training_state['global_step'],
+        training_state.get('lr_scheduler_state')
+    )
+
+    hubert = model
+    global_step = training_state['global_step']
+    best_val_loss = training_state['best_val_loss']
+    best_val_accuracy = training_state['best_val_accuracy']
+    patience_count = training_state['patience_count']
+
     start_epoch = global_step // len(train_loader)
 
     for epoch in range(start_epoch, epochs):
@@ -495,6 +594,9 @@ def train(args):
                         f"{global_step}_{wandb.run.id}.pt"
                     )
                     # torch.save(checkpoint, checkpoint_path / checkpoint_name)
+
+                    if global_step == 61:
+                        torch.save(checkpoint, checkpoint_path / checkpoint_name)
                     
                     # Reduce regularization after improvement
                     if args.dynamic_reg:
