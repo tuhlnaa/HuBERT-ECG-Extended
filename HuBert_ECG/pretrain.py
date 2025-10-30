@@ -144,6 +144,53 @@ def _validate_vocab_sizes(args, dataset):
         )
 
 
+def validate_model(model, val_loader, device, logger, global_step):
+    """Validation loop extracted as separate function."""
+    model.eval()
+    
+    val_losses = []
+    val_accuracies = []
+    
+    logger.info(f"Validating model at step {global_step}...")
+    
+    with torch.no_grad():
+        for ecg, _, ensemble_labels in tqdm(val_loader, total=len(val_loader)):
+            ecg, ensemble_labels = ecg.to(device), ensemble_labels.to(device)
+            # attention_mask = (attention_mask).to(device) # attention mask could harm inference performance according to HF docs
+
+            # (ensamble_length, batch_size, sequence_length)
+            ensemble_labels = ensemble_labels.transpose(0, 1)
+
+            # Forward pass (no attention mask during validation per HF recommendation)
+            encoder_output = model(
+                ecg, 
+                attention_mask=None, 
+                output_attentions=False, 
+                output_hidden_states=False, 
+                return_dict=True
+            )
+            ensemble_logits = model.logits(encoder_output['last_hidden_state'])
+
+            # labels: (batch_size, sequence_length), logits: (batch_size, sequence_length, vocab_size)
+            assert len(ensemble_labels) == len(ensemble_logits), f"VAL! len(ensamble_labels) must be equal to len(ensamble_logits). Found {len(ensemble_labels)} and {len(ensemble_logits)}"
+
+            # Compute loss and accuracy across ensemble
+            batch_loss = 0
+            batch_accuracy = 0
+
+            for labels, logits in zip(ensemble_labels, ensemble_logits):
+                logits_transposed = logits.transpose(1, 2)
+                batch_loss += F.cross_entropy(logits_transposed, labels)
+                batch_accuracy += (logits_transposed.argmax(dim=1) == labels).float().mean()
+            
+            batch_accuracy /= len(ensemble_logits)
+            
+            val_losses.append(batch_loss.item())
+            val_accuracies.append(batch_accuracy.item())
+    
+    return np.mean(val_losses), np.mean(val_accuracies)
+
+
 def train(args):
     # Device setup
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -331,13 +378,13 @@ def train(args):
 
         train_losses = []
         
-        for ecg, attention_mask, ensamble_labels in tqdm(train_loader, total=len(train_loader)):
+        for ecg, attention_mask, ensemble_labels in tqdm(train_loader, total=len(train_loader)):
 
             global_step += 1
             
             ecg = ecg.to(device) 
             attention_mask = attention_mask.to(device)
-            ensamble_labels = ensamble_labels.to(device)
+            ensemble_labels = ensemble_labels.to(device)
             
             #logger.info("Mapped data to device")
 
@@ -349,18 +396,18 @@ def train(args):
 
                 mask = out_encoder_dict['mask_time_indices']
                 
-                ensamble_logits = hubert.logits(out_encoder_dict['last_hidden_state'])
+                ensemble_logits = hubert.logits(out_encoder_dict['last_hidden_state'])
                 #logger.info("Computed logits")
                                 
                 # modify loss computation to enable ensamble loss (sum of losses)                
-                ensamble_labels = ensamble_labels.transpose(0, 1) 
+                ensemble_labels = ensemble_labels.transpose(0, 1) 
                 
                 masked_loss = 0
                 unmasked_loss = 0
                 
-                assert len(ensamble_labels) == len(ensamble_logits), f"len(ensamble_labels) must be equal to len(ensamble_logits). Found {len(ensamble_labels)} and {len(ensamble_logits)}"
+                assert len(ensemble_labels) == len(ensemble_logits), f"len(ensamble_labels) must be equal to len(ensamble_logits). Found {len(ensemble_labels)} and {len(ensemble_logits)}"
                 
-                for labels, logits in zip(ensamble_labels, ensamble_logits):
+                for labels, logits in zip(ensemble_labels, ensemble_logits):
                     # labels is (BS, F), logits is (BS, F, V)
                     masked_loss += F.cross_entropy(logits[mask], labels[mask])
                     unmasked_loss += F.cross_entropy(logits[~mask], labels[~mask])
@@ -374,71 +421,34 @@ def train(args):
             
             #logger.info("Accumulated scaled loss")
             
-            ### GRADIENT ACCUMULATION ###
-            
+            # Gradient accumulation
             if global_step % accumulation_steps == 0:
                 scaler.step(optimizer)
                 lr_scheduler.step()
                 scaler.update()
-                optimizer.zero_grad()                
+                optimizer.zero_grad()
 
-            ### VALIDATION LOOP EVERY `val_interval` STEPS + LOGGING + CHECK OF EARLY STOPPING CONDITION ###
 
+            # Validation every val_interval steps
             if global_step % args.val_interval == 0:
-
-                hubert.eval()
+                val_loss, val_accuracy = validate_model(
+                    hubert, val_loader, device, logger, global_step
+                )
                 
-                val_losses = []                
-                val_accuracies = []
-                
-                logger.info(f"Validating model at step {global_step}...")
-                
-                ### VALIDATION LOOP ###
-                
-                for ecg, _, ensamble_labels in tqdm(val_loader, total=len(val_loader)):
-                    ecg = (ecg).to(device)
-                    #attention_mask = (attention_mask).to(device) # attention mask could harm inference performance according to HF docs
-                    ensamble_labels = (ensamble_labels).to(device)
-                    
-                    ensamble_labels = ensamble_labels.transpose(0, 1) # (ensamble_length, BS, F)
-
-                    with torch.no_grad():
-                        out_encoder_dict = hubert(ecg, attention_mask=None, output_attentions=False, output_hidden_states=False, return_dict=True)
-                        ensamble_logits = hubert.logits(out_encoder_dict['last_hidden_state'])
-                        
-                        assert len(ensamble_labels) == len(ensamble_logits), f"VAL! len(ensamble_labels) must be equal to len(ensamble_logits). Found {len(ensamble_labels)} and {len(ensamble_logits)}"
-                        
-                        loss = 0
-                        accuracy = 0
-                        for labels, logits in zip(ensamble_labels, ensamble_logits):
-                            logits = logits.transpose(1, 2)
-                            loss += F.cross_entropy(logits, labels)
-                            accuracy += (logits.argmax(dim=1) == labels).float().mean() # mean over batch for a given task
-                        
-                        accuracy /= len(ensamble_logits) # mean over tasks
-                        
-                    val_accuracies.append(accuracy.item())                    
-                    val_losses.append(loss.item())
-                    
-                ### END OF VALIDATION LOOP ###
-                    
-                val_loss = np.mean(val_losses)
-                val_accuracy = np.mean(val_accuracies)
                 train_loss = np.mean(train_losses)
-                train_losses.clear() # to keep it aligned with validation losses
-                    
-                ### LOGGING ###
-                
+                train_losses.clear()
+
+                # Logging
                 logger.info(f"Step: {global_step}")
-                logger.info(f"train_loss_{args.train_iteration}: {train_loss}")
-                logger.info(f"val_loss_{args.train_iteration}: {val_loss}")
+                logger.info(f"train_loss: {train_loss}")
+                logger.info(f"val_loss: {val_loss}")
                 logger.info(f"val_accuracy: {val_accuracy}")
                 
                                                                         
                 wandb.log({
-                    f"train_loss_{args.train_iteration}" : train_loss,
-                    f"val_loss_{args.train_iteration}" : val_loss,
-                    "val_accuracy" : val_accuracy
+                    f"train_loss": train_loss,
+                    f"val_loss": val_loss,
+                    "val_accuracy": val_accuracy
                 }, step=global_step)
 
                 hubert.train()
