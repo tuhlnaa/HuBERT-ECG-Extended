@@ -1,6 +1,5 @@
 import logging
 import numpy as np
-# from loguru import logger
 import pandas as pd
 from typing import Tuple, Any
 import torch
@@ -10,11 +9,12 @@ from torch.utils.data import Dataset
 import neurokit2 as nk
 from scipy import signal
 from torch.utils.data import DataLoader
+from rich.logging import RichHandler
 
 SAMPLES_IN_5_SECONDS_AT_500HZ = 2500
 SAMPLES_IN_10_SECONDS_AT_500HZ = 5000
 
-from rich.logging import RichHandler
+
 
 # Configure logging
 logging.basicConfig(
@@ -34,6 +34,9 @@ def create_dataloader(
     random_crop: bool = False,
     shuffle: bool = True,
     is_pretrain: bool = False,
+    kmeans_path: str = None,
+    features_path: str = None,
+    drop_last: bool = True,
 ) -> DataLoader:
     """Create a DataLoader for ECG dataset.
     
@@ -46,6 +49,11 @@ def create_dataloader(
         random_crop: Whether to apply random 5s crop augmentation
         shuffle: Whether to shuffle data
         is_pretrain: Whether this is for pretraining mode
+        kmeans_path: Path to text file containing paths to K-means models
+            for ensemble label assignment (used in pretraining)
+        features_path: Directory path to dumped features extracted from shards
+            or transformer mid-layers (used in pretraining)
+        drop_last: Whether to drop the last incomplete batch
 
     Returns:
         Configured DataLoader instance
@@ -57,6 +65,8 @@ def create_dataloader(
         downsampling_factor=downsample_factor,
         pretrain=is_pretrain,
         random_crop=random_crop,
+        kmeans_path=kmeans_path,
+        features_path=features_path
     )
 
     if len(dataset) == 0:
@@ -68,7 +78,7 @@ def create_dataloader(
         batch_size=batch_size,
         shuffle=shuffle,
         pin_memory=True,
-        drop_last=True,
+        drop_last=drop_last,
     )
     print(f"Dataset samples: {len(dataset)}, DataLoader batches: {len(data_loader)}")
 
@@ -90,28 +100,49 @@ class ECGDataset(Dataset):
         random_crop : bool = False,
         return_full_length : bool = False,
         ):
-        '''
+        """Dataset for loading and processing ECG signals for pretraining and finetuning.
+
         Args:
-        - `path_to_dataset_csv` = path to dataset in csv format to use. 
-        This csv should contain as many binary columns as labels to predict in the multilabel classification task.
-        In case of multiclass classification problem, only one column is expected and the values are the integers representing the classes in the range [0, n_classes-1].
-        - `ecg_dir_path` = path to the dir where raw ecgs are
-        - `downsampling_factor` = integer value indicating the downsampling factor to apply to the ecg signal. Default None
-        - `features_path` = path to the dir where dumped features are (extracted from shards or from mid-layers of transformer). Used only when pretrain is true
-        - `kmeans_path` = path to a text file that contains the paths to kmeans model used for assigning ensamble labels to the features. Used when pretrain is true
-        - `label_start_index` = index of the column in the csv dataset at which labels are. Use when pretrain and encode are false
-        - `pretrain` = boolean indicating whether pretraining is in progress or not
-        - `encode` = additional boolean value used only to speed up features dumping
-        - `beat_based_attention_mask` = optional boolean indicating whether beat-based attention mask should be calculated. Default False
-        - `random_crop` = optional boolean indicating whether to randomly crop the ecg signal. Default False. To use only during finetuning and testing to avoid misalignments between signals and features.
-        - `return_full_length` = optional boolean indicating whether to return the full length (10-sec actually) of the ecg signal. Default False. 
-        
-        The `__getitem__` method returns:
-        - ecg_data = (12*length/downsampling_factor,) float tensor, where length = 5000 if `return_full_length` else 2500
-        - attention_mask = (12*length/downsampling_factor,) long tensor, where length = 5000 if `return_full_length` else 2500
-        - labels = (ensamble_length, n_tokens,) when `pretrain` is True, (n_classes,) when `pretrain` is False and `encode` is False
-        - ecg_filename = string indicating the filename of the ecg item when `encode` is True and `pretrain` is False
-        '''
+            path_to_dataset_csv: Path to dataset CSV file. For multilabel classification,
+                the CSV should contain binary columns for each label. For multiclass classification,
+                a single column with integer values in range [0, n_classes-1] is expected.
+            ecg_dir_path: Directory path containing raw ECG files.
+            downsampling_factor: Downsampling factor to apply to ECG signals.
+            features_path: Directory path to dumped features extracted from shards
+                or transformer mid-layers. Used only when `pretrain=True`.
+            kmeans_path: Path to text file containing paths to K-means models
+                used for assigning ensemble labels to features. Used when `pretrain=True`.
+            label_start_index: Column index in CSV where labels begin.
+                Used when `pretrain=False` and `encode=False`.
+            pretrain: Whether pretraining mode is active.
+            encode: Whether to enable encoding mode for faster feature dumping.
+            beat_based_attention_mask: Whether to calculate beat-based attention
+                mask focusing on P wave, QRS complex, and T wave.
+            random_crop: Whether to randomly crop ECG signals. Should only be
+                used during finetuning and testing to avoid misalignments between signals and
+                features.
+            return_full_length: Whether to return full 10-second ECG signals
+                instead of 5-second segments.
+
+        Note:
+            The `__getitem__` method returns different outputs based on mode:
+            
+            * **Pretrain mode** (`pretrain=True`):
+                - ecg_data: Float tensor of shape (12 * length / downsampling_factor,)
+                - attention_mask: Long tensor of shape (12 * length / downsampling_factor,)
+                - labels: Long tensor of shape (ensemble_length, n_tokens)
+            
+            * **Encode mode** (`encode=True`, `pretrain=False`):
+                - ecg_data: Float tensor of shape (12 * length / downsampling_factor,)
+                - ecg_filename: String indicating the ECG filename
+            
+            * **Finetuning mode** (`pretrain=False`, `encode=False`):
+                - ecg_data: Float tensor of shape (12 * length / downsampling_factor,)
+                - attention_mask: Long tensor of shape (12 * length / downsampling_factor,)
+                - labels: Float tensor of shape (n_classes,) for multilabel or Long tensor for multiclass
+            
+            where length = 5000 if `return_full_length=True` else 2500.
+        """
         
         logger.info(f"Loading dataset from {path_to_dataset_csv}...")
 

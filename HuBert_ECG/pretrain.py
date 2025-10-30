@@ -1,6 +1,5 @@
 import copy
-from dataclasses import dataclass
-from pathlib import Path
+import logging
 import torch
 import wandb
 
@@ -8,9 +7,11 @@ import numpy as np
 import torch.nn as nn
 import torch.optim as optim
 
+from dataclasses import dataclass
 from loguru import logger
 from math import ceil
-from torch.utils.data import DataLoader
+from pathlib import Path
+from rich.logging import RichHandler
 from tqdm import tqdm
 from transformers import HubertConfig
 from transformers import get_linear_schedule_with_warmup
@@ -19,9 +20,17 @@ from transformers import get_linear_schedule_with_warmup
 from torch.nn import functional as F
 
 # Import custom modules
-from dataset import ECGDataset
+from dataset import create_dataloader
 from config import create_training_parser, init_seeds
 from hubert_ecg import HuBERTECG as HuBERT, HuBERTECGConfig
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(message)s", 
+    handlers=[RichHandler()]
+)
+logger = logging.getLogger(__name__)
 
 EPS = 1E-09
 MINIMAL_IMPROVEMENT = 1e-3
@@ -120,6 +129,21 @@ def _get_model_config(largeness: str) -> dict:
     return MODEL_CONFIGS[largeness]
 
 
+def _validate_vocab_sizes(args, dataset):
+    """Validate vocabulary sizes match k-means cluster counts."""
+    assert len(args.vocab_sizes) == dataset.ensamble_length, (
+        f"Number of vocab_sizes ({len(args.vocab_sizes)}) must match "
+        f"number of tasks ({dataset.ensamble_length})"
+    )
+    
+    for vocab_size, kmeans in zip(args.vocab_sizes, dataset.ensamble_kmeans):
+        n_clusters = kmeans.cluster_centers_.shape[0]
+        assert vocab_size == n_clusters, (
+            f"vocab_size ({vocab_size}) must match number of k-means "
+            f"clusters ({n_clusters})"
+        )
+
+
 def train(args):
     # Device setup
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -145,53 +169,37 @@ def train(args):
     
     scaler = torch.amp.GradScaler()
     
-
-    ### START TRAINING ITERATION ###
-    
-    train_set = ECGDataset(
-        path_to_dataset_csv=args.path_to_dataset_csv_train,
-        #ecg_dir_path="/data/ECG_AF/train_self_supervised",
-        ecg_dir_path="output/PTB",
-        downsampling_factor = args.downsampling_factor,
+    # Setup data
+    train_loader = create_dataloader(
+        csv_path=args.path_to_dataset_csv_train,
+        ecg_dir=args.ecg_dir_path,
+        batch_size=args.batch_size,
+        downsample_factor=args.downsampling_factor,
         features_path=args.train_features_path,
-        kmeans_path = args.kmeans_path,
-        )
-
-    val_set = ECGDataset(
-        path_to_dataset_csv=args.path_to_dataset_csv_val,
-        #ecg_dir_path="/data/ECG_AF/val_self_supervised",
-        ecg_dir_path="output/PTB",
+        kmeans_path=args.kmeans_path,
+        is_pretrain=True,
+        drop_last=False
+    )
+    val_loader = create_dataloader(
+        csv_path=args.path_to_dataset_csv_val,
+        ecg_dir=args.ecg_dir_path,
+        batch_size=args.batch_size,
+        downsample_factor=args.downsampling_factor,
         features_path=args.val_features_path,
-        downsampling_factor = args.downsampling_factor,
-        kmeans_path = args.kmeans_path,
-        )
-    
-    assert len(args.vocab_sizes) == train_set.ensamble_length, f"len(vocab_sizes) must be equal to the number of tasks. Found {len(args.vocab_sizes)} and {train_set.ensamble_length} tasks"
-    for v, k in zip(args.vocab_sizes, train_set.ensamble_kmeans):
-        assert v == k.cluster_centers_.shape[0], f"vocab_sizes must be equal to the number of clusters in the kmeans models. Found {v} and {k.cluster_centers_.shape[0]} clusters"
-        
-    
-    train_dl = DataLoader(
-        train_set,
-        collate_fn=train_set.collate,
-        num_workers=0,
-        batch_size=args.batch_size,
-        shuffle=True,
-        pin_memory=True
-        )
-
-    val_dl = DataLoader(
-        val_set,
-        collate_fn=val_set.collate,
-        num_workers=0,
-        batch_size=args.batch_size,
+        kmeans_path=args.kmeans_path,
+        is_pretrain=True,
         shuffle=False,
-        pin_memory=True
-        )
+        drop_last=False
+    )
 
-    epochs = args.training_steps // (len(train_dl) // accumulation_steps) + 1 if args.training_steps is not None else args.epochs
+    # Validate configuration
+    _validate_vocab_sizes(args, train_loader.dataset)
 
-
+    if args.training_steps is not None:
+        steps_per_epoch = len(train_loader) // accumulation_steps
+        epochs =  args.training_steps // steps_per_epoch + 1
+    else:
+        epochs = args.epochs
 
     if args.resume_pretraining:
         hubert_name = args.load_path.split('/')[-1]
@@ -314,8 +322,8 @@ def train(args):
     
     # number of params
     logger.info(f"Number of parameters: {sum(p.numel() for p in hubert.parameters())}")
-    start_epoch = global_step // len(train_dl)
-            
+    start_epoch = global_step // len(train_loader)
+
     for epoch in range(start_epoch, epochs):
 
         hubert.train()
@@ -323,7 +331,7 @@ def train(args):
 
         train_losses = []
         
-        for ecg, attention_mask, ensamble_labels in tqdm(train_dl, total=len(train_dl)):
+        for ecg, attention_mask, ensamble_labels in tqdm(train_loader, total=len(train_loader)):
 
             global_step += 1
             
@@ -387,7 +395,7 @@ def train(args):
                 
                 ### VALIDATION LOOP ###
                 
-                for ecg, _, ensamble_labels in tqdm(val_dl, total=len(val_dl)):
+                for ecg, _, ensamble_labels in tqdm(val_loader, total=len(val_loader)):
                     ecg = (ecg).to(device)
                     #attention_mask = (attention_mask).to(device) # attention mask could harm inference performance according to HF docs
                     ensamble_labels = (ensamble_labels).to(device)
@@ -460,7 +468,7 @@ def train(args):
                     #torch.save(checkpoint, checkpoint_path / checkpoint_name )
 
                     logger.info(f"New best (best_val_loss = {best_val_loss}) - model saved at step {global_step}")
-                    
+                    # Dynamically adjust regularization strength based on training conditions.
                     dynamic_regularizer(optimizer, hubert, penalty=False) if args.dynamic_reg else None # unburdening model from regularization
 
                 elif val_accuracy >= best_val_accuracy + MINIMAL_IMPROVEMENT: # if loss doesn't improve significantly but accuracy does, save checkpoint anyway
@@ -482,20 +490,19 @@ def train(args):
                     
                     #torch.save(checkpoint, checkpoint_path / checkpoint_name)
                     logger.info(f"Val loss not improved but val accuracy did (best_val_accuracy = {best_val_accuracy}) - model saved at step {global_step}")   
-                    
+                    # Dynamically adjust regularization strength based on training conditions.
                     dynamic_regularizer(optimizer, hubert, penalty=False) if args.dynamic_reg else None # unburdening model from regularization
                     
                 else: #worsening performance
                     patience_count += 1
                      
                     if args.dynamic_reg and patience_count % (patience // args.intervals_for_penalty) == 0 and patience_count != patience:
+                        # Dynamically adjust regularization strength based on training conditions.
                         dynamic_regularizer(optimizer, hubert, penalty=True) # penalizing model with regularization
                     
                     if patience_count == patience:
                         logger.warning(f"EARLY STOPPING: Max num of val intervals with no improvement reached at {global_step}")
-                        wandb.log({
-                            "patience_count" : patience_count
-                        })
+                        logger.info(f"patience_count: {patience_count}")
                         return
                     
 
