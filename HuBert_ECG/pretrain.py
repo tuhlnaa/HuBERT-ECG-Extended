@@ -111,7 +111,7 @@ def train(args):
     
     optimizer = _create_optimizer(model, lr, betas, weight_decay)
     
-    if args.resume_pretraining and training_state['is_same_iteration']:
+    if args.resume_pretraining:
         optimizer.load_state_dict(training_state['optimizer_state'])
         optimizer.param_groups[0]['weight_decay'] = max(MIN_WEIGHT_DECAY, 
                                                          optimizer.param_groups[0]['weight_decay'])

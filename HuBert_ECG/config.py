@@ -492,13 +492,16 @@ def create_training_parser():
     init_group = parser.add_mutually_exclusive_group()
     init_group.add_argument("--resume_pretraining", action="store_true", help="Whether to resume pretraining")
 
+    a = parser.add_mutually_exclusive_group()
+    a.add_argument("--load_path", type=str, help="Path to a model checkpoint to load for resuming training")
+    a.add_argument("--pretrained_path", type=str, help="Should custom pre-trained weights be loaded?")
+
     # General optional arguments
     parser.add_argument("--accumulation_steps", type=int, default=1, help="Number of batch gradients to accumulate before updating model params")
     parser.add_argument("--val_interval", type=int, help="Training steps to wait before validation. Required if training_steps is used")
     parser.add_argument("--downsampling_factor", type=int, help="Downsampling factor to apply to the ECG signal")
 
     # Model architecture
-    parser.add_argument("--load_path", type=str, help="Path to a model checkpoint to load for starting/resuming fine-tuning")
     parser.add_argument("--largeness", type=str, choices=["small", "base", "large"], help="Model largeness in case of random initialization")
 
     # Optimization

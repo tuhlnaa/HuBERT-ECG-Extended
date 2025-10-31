@@ -135,10 +135,15 @@ def _validate_vocab_sizes(args, dataset):
 
 def _resume_from_checkpoint(args, device):
     """Load model and training state from checkpoint."""
-    checkpoint_name = args.load_path.split('/')[-1]
+    if args.load_path:
+        model_path = args.load_path
+    elif args.pretrained_path:
+        model_path = args.pretrained_path
+
+    checkpoint_name = model_path.split('/')[-1]
     logger.info(f"Loading checkpoint {checkpoint_name} to resume pretraining")
     
-    checkpoint = torch.load(args.load_path, map_location=torch.device('cpu'), weights_only=False)
+    checkpoint = torch.load(model_path, map_location = 'cpu', weights_only=False)
     
     # Validate checkpoint
     assert checkpoint['pretraining_vocab_sizes'] == args.vocab_sizes, \
@@ -151,11 +156,8 @@ def _resume_from_checkpoint(args, device):
     model = HuBERT(config)
     model.load_state_dict(checkpoint['model_state_dict'])
     
-    previous_iteration = int(checkpoint_name.split('_')[1])
-    is_same_iteration = (args.train_iteration == previous_iteration)
-    
     # Handle iteration switch
-    if not is_same_iteration:
+    if args.pretrained_path:
         logger.info("Switching to another pretraining iteration: "
                    "reinitializing label embedding and restoring dropouts...")
         _reset_label_embedding(model, args.vocab_sizes)
@@ -169,11 +171,10 @@ def _resume_from_checkpoint(args, device):
         'best_val_loss': checkpoint['best_val_loss'],
         'patience_count': checkpoint['patience_count'],
         'best_val_accuracy': checkpoint['best_val_accuracy'],
-        'is_same_iteration': is_same_iteration,
         'optimizer_state': checkpoint['optimizer_state_dict'],
         'lr_scheduler_state': checkpoint['lr_scheduler_state_dict']
     }
-    
+
     return model, training_state
 
 
@@ -211,7 +212,6 @@ def _initialize_model_from_scratch(args, model_config, mask_time_prob, device):
         'best_val_loss': float('inf'),
         'best_val_accuracy': 0.0,
         'patience_count': 0,
-        'is_same_iteration': False,
         'optimizer_state': None,
         'lr_scheduler_state': None
     }
