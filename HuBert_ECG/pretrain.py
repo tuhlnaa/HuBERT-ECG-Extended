@@ -3,6 +3,7 @@ import logging
 import torch
 import wandb
 import numpy as np
+import torch.optim as optim
 
 from loguru import logger
 from pathlib import Path
@@ -19,8 +20,8 @@ from training_utils import (
     _create_optimizer, 
     _ensure_min_dropout, 
     _get_model_config, 
-    _initialize_model_from_scratch, 
-    _resume_from_checkpoint, 
+    initialize_model_from_scratch, 
+    resume_from_checkpoint, 
     _validate_vocab_sizes, 
     dynamic_regularizer
 )
@@ -43,6 +44,21 @@ SELF_SUPERVISED_MODEL_CKPT_PATH = "output/checkpoints/self-supervised/"
 WARMUP_RATIO = 0.08
 DROPOUT_RESET_VALUE = 0.1
 MIN_WEIGHT_DECAY = 0.01
+
+
+def _validate_vocab_sizes(args, dataset):
+    """Validate vocabulary sizes match k-means cluster counts."""
+    assert len(args.vocab_sizes) == dataset.ensamble_length, (
+        f"Number of vocab_sizes ({len(args.vocab_sizes)}) must match "
+        f"number of tasks ({dataset.ensamble_length})"
+    )
+    
+    for vocab_size, kmeans in zip(args.vocab_sizes, dataset.ensamble_kmeans):
+        n_clusters = kmeans.cluster_centers_.shape[0]
+        assert vocab_size == n_clusters, (
+            f"vocab_size ({vocab_size}) must match number of k-means "
+            f"clusters ({n_clusters})"
+        )
 
 
 def train(args):
@@ -105,12 +121,12 @@ def train(args):
 
 
     if args.resume_pretraining:
-        model, training_state = _resume_from_checkpoint(args, device)
+        model, training_state = resume_from_checkpoint(args, device)
     else:
-        model, training_state = _initialize_model_from_scratch(args, model_config, mask_time_prob, device)
-    
-    optimizer = _create_optimizer(model, lr, betas, weight_decay)
-    
+        model, training_state = initialize_model_from_scratch(args, model_config, mask_time_prob, device)
+
+    optimizer = optim.AdamW(model.parameters(), lr=lr, betas=betas, eps=EPS, weight_decay=weight_decay)
+
     if args.resume_pretraining:
         optimizer.load_state_dict(training_state['optimizer_state'])
         optimizer.param_groups[0]['weight_decay'] = max(MIN_WEIGHT_DECAY, 
@@ -122,7 +138,7 @@ def train(args):
         args.training_steps, 
         WARMUP_RATIO,
         training_state['global_step'],
-        training_state.get('lr_scheduler_state')
+        training_state.get('scheduler_state')
     )
 
     hubert = model
@@ -248,7 +264,7 @@ def train(args):
                         "model_config": hubert.config,
                         "model_state_dict": copy.deepcopy(hubert.state_dict()),
                         "optimizer_state_dict": copy.deepcopy(optimizer.state_dict()),
-                        "lr_scheduler_state_dict": copy.deepcopy(lr_scheduler.state_dict()),
+                        "scheduler_state_dict": copy.deepcopy(lr_scheduler.state_dict()),
                         "best_val_loss": best_val_loss,
                         "best_val_accuracy": best_val_accuracy,
                         "pretraining_vocab_sizes": args.vocab_sizes,
