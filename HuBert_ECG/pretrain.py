@@ -121,7 +121,6 @@ def train(args):
     else:
         model, optimizer, scheduler, training_state = initialize_model_from_scratch(args, mask_time_prob, device)
 
-    hubert = model
     global_step = training_state['global_step']
     best_val_loss = training_state['best_val_loss']
     best_val_accuracy = training_state['best_val_accuracy']
@@ -130,7 +129,7 @@ def train(args):
     start_epoch = global_step // len(train_loader)
 
     for epoch in range(start_epoch, epochs):
-        hubert.train()
+        model.train()
         logger.info(f"Epoch {epoch+1}/{epochs}")
 
         train_losses = []
@@ -146,11 +145,11 @@ def train(args):
             attention_mask = attention_mask.to(device)
             ensemble_labels = ensemble_labels.to(device)
 
-            hubert.train()
+            model.train()
 
             with torch.amp.autocast('cuda'):
                 # Forward pass
-                encoder_output = hubert(
+                encoder_output = model(
                     ecg, 
                     attention_mask=attention_mask, 
                     output_attentions=False, 
@@ -159,7 +158,7 @@ def train(args):
                 )
                 
                 mask = encoder_output['mask_time_indices']
-                ensemble_logits = hubert.logits(encoder_output['last_hidden_state'])
+                ensemble_logits = model.logits(encoder_output['last_hidden_state'])
 
                 # Compute ensemble loss
                 ensemble_labels = ensemble_labels.transpose(0, 1)
@@ -197,7 +196,7 @@ def train(args):
             # Validation every val_interval steps
             if global_step % args.val_interval == 0:
                 val_loss, val_accuracy = validate_pretrain_model(
-                    hubert, val_loader, device, logger, global_step
+                    model, val_loader, device, logger, global_step
                 )
                 
                 train_loss = np.mean(train_losses)
@@ -241,8 +240,8 @@ def train(args):
                     checkpoint = {
                         "global_step": global_step,
                         "patience_count": patience_count,
-                        "model_config": hubert.config,
-                        "model_state_dict": copy.deepcopy(hubert.state_dict()),
+                        "model_config": model.config,
+                        "model_state_dict": copy.deepcopy(model.state_dict()),
                         "optimizer_state_dict": copy.deepcopy(optimizer.state_dict()),
                         "scheduler_state_dict": copy.deepcopy(scheduler.state_dict()),
                         "best_val_loss": best_val_loss,
@@ -261,7 +260,7 @@ def train(args):
                     
                     # Reduce regularization after improvement
                     if args.dynamic_reg:
-                        dynamic_regularizer(optimizer, hubert, penalty=False)
+                        dynamic_regularizer(optimizer, model, penalty=False)
                 
                 else:  # No improvement
                     patience_count += 1
@@ -269,7 +268,7 @@ def train(args):
                     # Apply regularization penalty at intervals
                     if args.dynamic_reg and patience_count != patience:
                         if patience_count % (patience // args.intervals_for_penalty) == 0:
-                            dynamic_regularizer(optimizer, hubert, penalty=True)
+                            dynamic_regularizer(optimizer, model, penalty=True)
                     
                     # Early stopping
                     if patience_count >= patience:

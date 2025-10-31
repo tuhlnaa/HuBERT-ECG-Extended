@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 # from transformers.models.hubert.modeling_hubert import compute_mask_indices
 
 # Import custom modules
-from hubert_ecg import HuBERTECG as HuBERT, HuBERTECGConfig
+from hubert_ecg import HubertECG, HubertECGConfig
 
 # Configure logging
 logging.basicConfig(
@@ -34,7 +34,7 @@ def _create_config_from_checkpoint(checkpoint, vocab_sizes):
     config = checkpoint['model_config']
     
     if isinstance(config, HubertConfig):
-        config = HuBERTECGConfig(
+        config = HubertECGConfig(
             ensemble=len(checkpoint['pretraining_vocab_sizes']),
             vocab_sizes=checkpoint['pretraining_vocab_sizes'],
             **config.to_dict()
@@ -118,7 +118,7 @@ def resume_from_checkpoint(args, device):
         "Vocab sizes mismatch between checkpoint and args"
 
     # Initialize and load model
-    model = HuBERT(checkpoint['model_config']).to(device)
+    model = HubertECG(checkpoint['model_config']).to(device)
     model.load_state_dict(checkpoint['model_state_dict'])
     
     # Handle iteration switch (using pretrained model for new iteration)
@@ -180,7 +180,7 @@ def initialize_model_from_scratch(args, mask_time_prob, device):
     key = "null" if args.downsampling_factor is None else str(args.downsampling_factor)
     conv_configs = configs[key]
     
-    config = HuBERTECGConfig(
+    config = HubertECGConfig(
         ensemble_length=len(args.vocab_sizes),
         vocab_sizes=args.vocab_sizes,
         hidden_size=model_config["hidden_size"],
@@ -200,7 +200,7 @@ def initialize_model_from_scratch(args, mask_time_prob, device):
     )
 
     # model = nn.DataParallel(model)
-    model = HuBERT(config)
+    model = HubertECG(config)
     model.to(device)
 
     optimizer = _create_optimizer(model, args.lr, args.weight_decay_mult)

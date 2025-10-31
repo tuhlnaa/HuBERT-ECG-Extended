@@ -10,7 +10,7 @@ from typing import Optional, Tuple, Union
 PROJECT_ROOT = Path(__file__).parents[0]
 sys.path.append(str(PROJECT_ROOT))
 
-from hubert_ecg import HuBERTECG, HuBERTECGConfig
+from hubert_ecg import HubertECG, HubertECGConfig
 
 class ActivationFunction(nn.Module):
     def __init__(self, activation : str):
@@ -35,7 +35,7 @@ class HuBERTForECGClassification(nn.Module):
 
     def __init__(
         self,
-        hubert_ecg : HuBERTECG,
+        hubert_ecg : HubertECG,
         num_labels : int,
         classifier_hidden_size : int = None,
         activation : str = 'tanh',

@@ -36,7 +36,7 @@ sys.path.append(str(PROJECT_ROOT))
 from HuBert_ECG.config import create_dumping_parser, init_seeds
 from HuBert_ECG.dataset import ECGDataset
 from HuBert_ECG.ecg_features import Config, ECGDataProcessor, FeatureExtractorFactory
-from HuBert_ECG.hubert_ecg import HuBERTECG, HuBERTECGConfig
+from HuBert_ECG.hubert_ecg import HubertECG, HubertECGConfig
 
 
 # Configure logging
@@ -443,7 +443,7 @@ class FeatureExtractionPipeline:
         model_config = checkpoint['model_config']
         model_config.conv_pos_batch_norm = False
         
-        model = HuBERTECG(model_config)
+        model = HubertECG(model_config)
         model.load_state_dict(checkpoint['model_state_dict'], strict=False)
         model = model.to(self.device)
         model.eval()
