@@ -13,10 +13,10 @@ from torch.nn import functional as F
 
 # Import custom modules
 from config import create_training_parser, init_seeds
-from dataset import create_dataloader
+from dataset import create_dataloader, validate_vocab_sizes
 from validator import validate_pretrain_model
 from training_utils import (
-    _create_lr_scheduler, 
+    create_scheduler, 
     _ensure_min_dropout, 
     initialize_model_from_scratch, 
     resume_from_checkpoint, 
@@ -41,21 +41,6 @@ SELF_SUPERVISED_MODEL_CKPT_PATH = "output/checkpoints/self-supervised/"
 WARMUP_RATIO = 0.08
 DROPOUT_RESET_VALUE = 0.1
 MIN_WEIGHT_DECAY = 0.01
-
-
-def _validate_vocab_sizes(args, dataset):
-    """Validate vocabulary sizes match k-means cluster counts."""
-    assert len(args.vocab_sizes) == dataset.ensamble_length, (
-        f"Number of vocab_sizes ({len(args.vocab_sizes)}) must match "
-        f"number of tasks ({dataset.ensamble_length})"
-    )
-    
-    for vocab_size, kmeans in zip(args.vocab_sizes, dataset.ensamble_kmeans):
-        n_clusters = kmeans.cluster_centers_.shape[0]
-        assert vocab_size == n_clusters, (
-            f"vocab_size ({vocab_size}) must match number of k-means "
-            f"clusters ({n_clusters})"
-        )
 
 
 def train(args):
@@ -104,7 +89,7 @@ def train(args):
     )
 
     # Validate configuration
-    _validate_vocab_sizes(args, train_loader.dataset)
+    validate_vocab_sizes(args, train_loader.dataset)
 
     if args.training_steps is not None:
         steps_per_epoch = len(train_loader) // accumulation_steps
@@ -125,7 +110,7 @@ def train(args):
                                                          optimizer.param_groups[0]['weight_decay'])
         _ensure_min_dropout(model, DROPOUT_RESET_VALUE)
     
-    lr_scheduler = _create_lr_scheduler(
+    lr_scheduler = create_scheduler(
         optimizer, 
         args.training_steps, 
         WARMUP_RATIO,

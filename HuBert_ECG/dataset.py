@@ -85,6 +85,21 @@ def create_dataloader(
     return data_loader
 
 
+def validate_vocab_sizes(args, dataset):
+    """Validate vocabulary sizes match k-means cluster counts."""
+    assert len(args.vocab_sizes) == dataset.ensamble_length, (
+        f"Number of vocab_sizes ({len(args.vocab_sizes)}) must match "
+        f"number of tasks ({dataset.ensamble_length})"
+    )
+    
+    for vocab_size, kmeans in zip(args.vocab_sizes, dataset.ensamble_kmeans):
+        n_clusters = kmeans.cluster_centers_.shape[0]
+        assert vocab_size == n_clusters, (
+            f"vocab_size ({vocab_size}) must match number of k-means "
+            f"clusters ({n_clusters})"
+        )
+
+
 class ECGDataset(Dataset):
     def __init__(
         self,

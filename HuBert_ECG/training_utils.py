@@ -1,16 +1,13 @@
 import json
 import logging
-from pathlib import Path
-from typing import Any, Dict
 import torch
-
 import torch.nn as nn
-import torch.optim as optim
 
-from dataclasses import dataclass
 from math import ceil
+from pathlib import Path
 from rich.logging import RichHandler
 from transformers import HubertConfig, get_linear_schedule_with_warmup
+from typing import Any, Dict
 # from transformers.models.hubert.modeling_hubert import compute_mask_indices
 
 # Import custom modules
@@ -28,17 +25,6 @@ logger = logging.getLogger(__name__)
 DROPOUT_ADJUSTMENT = 0.05
 DROPOUT_RESET_VALUE = 0.1
 WEIGHT_DECAY_MULTIPLIER = 5.0
-
-
-@dataclass
-class TrainingConfig:
-    """Training hyperparameters configuration."""
-    patience: int
-    lr: float
-    betas: tuple[float, float]
-    weight_decay: float
-    accumulation_steps: int
-    mask_time_prob: float
 
 
 def dynamic_regularizer(
@@ -75,6 +61,17 @@ def dynamic_regularizer(
                 module.p = max(module.p - DROPOUT_ADJUSTMENT, 0.1)
 
 
+def _load_json_config(filename: str) -> Dict[str, Any]:
+    """Load configuration from JSON file."""
+    config_path = Path(__file__).parents[1] / "configs" / filename
+    
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+    
+    with open(config_path, 'r') as f:
+        return json.load(f)
+
+
 def _create_config_from_checkpoint(checkpoint, vocab_sizes):
     """Create appropriate config from checkpoint."""
     config = checkpoint['model_config']
@@ -93,6 +90,31 @@ def _ensure_min_dropout(model, min_dropout):
     for name, module in model.named_modules():
         if 'dropout' in name:
             module.p = max(min_dropout, module.p)
+
+
+def create_scheduler(optimizer, total_steps, warmup_ratio, 
+                         current_step=0, previous_state=None):
+    """Create learning rate scheduler with warmup."""
+    num_warmup_steps = ceil(warmup_ratio * total_steps)
+    
+    if previous_state is not None:
+        # Resume from previous scheduler state
+        scheduler = get_linear_schedule_with_warmup(
+            optimizer=optimizer,
+            num_warmup_steps=num_warmup_steps - current_step,
+            num_training_steps=total_steps,
+            last_epoch=previous_state['last_epoch'] - 1
+        )
+        scheduler.load_state_dict(previous_state)
+    else:
+        # Create new scheduler
+        scheduler = get_linear_schedule_with_warmup(
+            optimizer=optimizer,
+            num_warmup_steps=num_warmup_steps,
+            num_training_steps=total_steps
+        )
+    
+    return scheduler
 
 
 def resume_from_checkpoint(args, device):
@@ -143,42 +165,6 @@ def resume_from_checkpoint(args, device):
     }
 
     return model, training_state
-
-
-def _create_lr_scheduler(optimizer, total_steps, warmup_ratio, 
-                         current_step=0, previous_state=None):
-    """Create learning rate scheduler with warmup."""
-    num_warmup_steps = ceil(warmup_ratio * total_steps)
-    
-    if previous_state is not None:
-        # Resume from previous scheduler state
-        scheduler = get_linear_schedule_with_warmup(
-            optimizer=optimizer,
-            num_warmup_steps=num_warmup_steps - current_step,
-            num_training_steps=total_steps,
-            last_epoch=previous_state['last_epoch'] - 1
-        )
-        scheduler.load_state_dict(previous_state)
-    else:
-        # Create new scheduler
-        scheduler = get_linear_schedule_with_warmup(
-            optimizer=optimizer,
-            num_warmup_steps=num_warmup_steps,
-            num_training_steps=total_steps
-        )
-    
-    return scheduler
-
-
-def _load_json_config(filename: str) -> Dict[str, Any]:
-    """Load configuration from JSON file."""
-    config_path = Path(__file__).parents[1] / "configs" / filename
-    
-    if not config_path.exists():
-        raise FileNotFoundError(f"Config file not found: {config_path}")
-    
-    with open(config_path, 'r') as f:
-        return json.load(f)
     
 
 def initialize_model_from_scratch(args, mask_time_prob, device):
@@ -228,4 +214,3 @@ def initialize_model_from_scratch(args, mask_time_prob, device):
     
     logger.info("Model built.")
     return model, training_state
-
