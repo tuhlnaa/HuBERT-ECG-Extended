@@ -17,12 +17,10 @@ from dataset import create_dataloader
 from validator import validate_pretrain_model
 from training_utils import (
     _create_lr_scheduler, 
-    _create_optimizer, 
     _ensure_min_dropout, 
     _get_model_config, 
     initialize_model_from_scratch, 
     resume_from_checkpoint, 
-    _validate_vocab_sizes, 
     dynamic_regularizer
 )
 

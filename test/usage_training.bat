@@ -49,6 +49,8 @@ rem Print header
 echo === HuBERT-ECG Training Pipeline ===
 echo Starting execution at %date% %time%
 
+set "LOAD_PATH=output/checkpoints/self-supervised/hubert_1_iteration_61.pt"
+
 rem Train iteration 1 (using morphological features)
 echo.
 echo [EXECUTING] Training iteration 1 with morphological features...
@@ -65,7 +67,10 @@ python HuBert_ECG/pretrain.py %TRAIN_ITERATION% %ECG_DIR_PATH% %TRAIN_CSV% %VAL_
     --model_dropout_mult=%MODEL_DROPOUT_MULT% ^
     %DYNAMIC_REG% ^
     --intervals_for_penalty=%INTERVALS_FOR_PENALTY% ^
+    --resume_pretraining ^
+    --load_path=%LOAD_PATH% ^
     --wandb_run_name=%WANDB_RUN_NAME%
+
 
 @REM rem Train iteration 2 (resume pretraining with latent features)
 @REM echo.
