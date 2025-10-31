@@ -18,7 +18,6 @@ from validator import validate_pretrain_model
 from training_utils import (
     _create_lr_scheduler, 
     _ensure_min_dropout, 
-    _get_model_config, 
     initialize_model_from_scratch, 
     resume_from_checkpoint, 
     dynamic_regularizer
@@ -70,9 +69,6 @@ def train(args):
         entity=None,
         name=args.wandb_run_name
     )
-
-    # Get model configuration
-    model_config = _get_model_config(args.largeness)
     
     ### configs ###
     patience = args.patience if args.patience is not None else args.training_steps // args.val_interval
@@ -116,12 +112,10 @@ def train(args):
     else:
         epochs = args.epochs
 
-
-
     if args.resume_pretraining:
         model, training_state = resume_from_checkpoint(args, device)
     else:
-        model, training_state = initialize_model_from_scratch(args, model_config, mask_time_prob, device)
+        model, training_state = initialize_model_from_scratch(args, mask_time_prob, device)
 
     optimizer = optim.AdamW(model.parameters(), lr=lr, betas=betas, eps=EPS, weight_decay=weight_decay)
 

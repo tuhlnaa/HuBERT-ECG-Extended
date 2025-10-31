@@ -1,4 +1,7 @@
+import json
 import logging
+from pathlib import Path
+from typing import Any, Dict
 import torch
 
 import torch.nn as nn
@@ -22,7 +25,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Constants
-EPS = 1E-09
 DROPOUT_ADJUSTMENT = 0.05
 DROPOUT_RESET_VALUE = 0.1
 WEIGHT_DECAY_MULTIPLIER = 5.0
@@ -168,83 +170,29 @@ def _create_lr_scheduler(optimizer, total_steps, warmup_ratio,
     return scheduler
 
 
-def _get_conv_config(downsampling_factor):
-    """Get convolutional layer configuration based on downsampling factor."""
-    configs = {
-        None: {
-            'conv_kernel': (10, 3, 3, 3, 3, 2, 2),
-            'conv_stride': (5, 2, 2, 2, 2, 2, 2),
-            'conv_dim': (512, 512, 512, 512, 512, 512, 512)
-        },
-        5: {
-            'conv_kernel': (10, 3, 3, 2, 2),
-            'conv_stride': (4, 2, 2, 2, 2),
-            'conv_dim': (512, 512, 512, 512, 512)
-        },
-        10: {
-            'conv_kernel': (10, 3, 3, 2),
-            'conv_stride': (4, 2, 2, 2),
-            'conv_dim': (512, 512, 512, 512)
-        }
-    }
+def _load_json_config(filename: str) -> Dict[str, Any]:
+    """Load configuration from JSON file."""
+    config_path = Path(__file__).parents[1] / "configs" / filename
     
-    if downsampling_factor not in configs:
-        raise ValueError(f"Downsampling factor {downsampling_factor} not supported. "
-                        f"Supported values: {list(configs.keys())}")
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
     
-    return configs[downsampling_factor]
+    with open(config_path, 'r') as f:
+        return json.load(f)
+    
 
-
-def _get_model_config(largeness: str) -> dict:
-    """Get model architecture configuration based on size variant.
-    
-    Args:
-        largeness: Model size variant ('small', 'base', or 'large')
-        
-    Returns:
-        Dictionary containing model hyperparameters
-    """
-    MODEL_CONFIGS = {
-        'small': {
-            'hidden_size': 512,
-            'num_hidden_layers': 8,
-            'num_attention_heads': 8,
-            'intermediate_size': 2048,
-            'classifier_proj_size': 256,
-            'layerdrop': 0.1,
-        },
-        'base': {
-            'hidden_size': 768,
-            'num_hidden_layers': 12,
-            'num_attention_heads': 12,
-            'intermediate_size': 3072,
-            'classifier_proj_size': 256,
-            'layerdrop': 0.1,
-        },
-        'large': {
-            'hidden_size': 960,
-            'num_hidden_layers': 16,
-            'num_attention_heads': 12,
-            'intermediate_size': 3840,
-            'classifier_proj_size': 512,
-            'layerdrop': 0.0,
-        },
-    }
-    
-    if largeness not in MODEL_CONFIGS:
-        raise ValueError(
-            f"Model size '{largeness}' not supported. "
-            f"Choose from: {list(MODEL_CONFIGS.keys())}"
-        )
-    
-    return MODEL_CONFIGS[largeness]
-
-
-def initialize_model_from_scratch(args, model_config, mask_time_prob, device):
+def initialize_model_from_scratch(args, mask_time_prob, device):
     """Initialize model from scratch with given configuration."""
     logger.info("Building a model from zero to start training...")
-    
-    conv_configs = _get_conv_config(args.downsampling_factor)
+
+    # Get model configuration from JSON
+    configs = _load_json_config("model_configs.json")
+    model_config = configs[args.largeness]
+
+    # Get conv configuration from JSON
+    configs = _load_json_config("conv_configs.json")
+    key = "null" if args.downsampling_factor is None else str(args.downsampling_factor)
+    conv_configs = configs[key]
     
     config = HuBERTECGConfig(
         ensemble_length=len(args.vocab_sizes),

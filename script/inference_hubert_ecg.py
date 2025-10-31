@@ -38,7 +38,7 @@ def main():
     print(num_labels) # 164
     
     # Load the JSON
-    with open("./configs/model_config.json", 'r') as f:
+    with open("./configs/model_inference_config.json", 'r') as f:
         config_dict = json.load(f)
 
     config = HuBERTECGConfig(**config_dict)
