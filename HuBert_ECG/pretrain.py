@@ -25,16 +25,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-EPS = 1E-09
 MINIMAL_IMPROVEMENT = 1e-3
 DROPOUT_ADJUSTMENT = 0.05
 WEIGHT_DECAY_MULTIPLIER = 5.0
 SELF_SUPERVISED_MODEL_CKPT_PATH = "output/checkpoints/self-supervised/"
-        
-# Constants
-WARMUP_RATIO = 0.08
-DROPOUT_RESET_VALUE = 0.1
-MIN_WEIGHT_DECAY = 0.01
 
 
 def dynamic_regularizer(
@@ -85,9 +79,6 @@ def train(args):
     
     ### configs ###
     patience = args.patience if args.patience is not None else args.training_steps // args.val_interval
-    lr = args.lr
-    betas = (0.9, 0.98)
-    weight_decay = max(0, 0.01 * args.weight_decay_mult)
     accumulation_steps = args.accumulation_steps
     mask_time_prob = args.mask_time_prob
     
@@ -126,9 +117,9 @@ def train(args):
         epochs = args.epochs
 
     if args.resume_pretraining:
-        model, training_state, optimizer, scheduler = resume_from_checkpoint(args, device)
+        model, optimizer, scheduler, training_state = resume_from_checkpoint(args, device)
     else:
-        model, training_state, optimizer, scheduler = initialize_model_from_scratch(args, mask_time_prob, device)
+        model, optimizer, scheduler, training_state = initialize_model_from_scratch(args, mask_time_prob, device)
 
     hubert = model
     global_step = training_state['global_step']

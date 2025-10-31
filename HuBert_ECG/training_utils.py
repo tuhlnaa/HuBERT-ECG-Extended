@@ -24,9 +24,6 @@ logger = logging.getLogger(__name__)
 
 # Constants
 DROPOUT_ADJUSTMENT = 0.05
-WEIGHT_DECAY_MULTIPLIER = 5.0
-EPS = 1E-09
-
 WARMUP_RATIO = 0.08
 DROPOUT_RESET_VALUE = 0.1
 MIN_WEIGHT_DECAY = 0.01
@@ -70,7 +67,7 @@ def _create_optimizer(model: nn.Module, learning_rate: float, weight_decay_mult:
         model.parameters(),
         lr=learning_rate,
         betas=(0.9, 0.98),
-        eps=EPS,
+        eps=1E-09,
         weight_decay=weight_decay
     )
 
@@ -112,8 +109,7 @@ def resume_from_checkpoint(args, device):
     elif args.pretrained_path:
         model_path = args.pretrained_path
 
-    checkpoint_name = model_path.split('/')[-1]
-    logger.info(f"Loading checkpoint {checkpoint_name} to resume pretraining")
+    logger.info(f"Loading checkpoint {Path(model_path).name}...")
     
     checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
     
@@ -121,11 +117,8 @@ def resume_from_checkpoint(args, device):
     assert checkpoint['pretraining_vocab_sizes'] == args.vocab_sizes, \
         "Vocab sizes mismatch between checkpoint and args"
 
-    # Create config
-    config = checkpoint['model_config']
-
     # Initialize and load model
-    model = HuBERT(config).to(device)
+    model = HuBERT(checkpoint['model_config']).to(device)
     model.load_state_dict(checkpoint['model_state_dict'])
     
     # Handle iteration switch (using pretrained model for new iteration)
@@ -144,19 +137,9 @@ def resume_from_checkpoint(args, device):
             if isinstance(module, nn.Dropout) and 'encoder.layers' in name:
                 module.p = DROPOUT_RESET_VALUE
     
-    # Prepare training state
-    training_state = {
-        'global_step': checkpoint['global_step'],
-        'best_val_loss': checkpoint['best_val_loss'],
-        'patience_count': checkpoint['patience_count'],
-        'best_val_accuracy': checkpoint['best_val_accuracy'],
-        'optimizer_state': checkpoint['optimizer_state_dict'],
-        'scheduler_state': checkpoint['scheduler_state_dict']
-    }
-
     # Create and restore optimizer
     optimizer = _create_optimizer(model, args.lr, args.weight_decay_mult)
-    optimizer.load_state_dict(training_state['optimizer_state'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
     # Ensure minimum weight decay
     for param_group in optimizer.param_groups:
@@ -169,11 +152,19 @@ def resume_from_checkpoint(args, device):
         optimizer, 
         args.training_steps, 
         WARMUP_RATIO,
-        training_state['global_step'],
-        training_state.get('scheduler_state')
+        checkpoint['global_step'],
+        checkpoint['scheduler_state_dict']
     )
 
-    return model, training_state, optimizer, scheduler
+    # Prepare training state
+    training_state = {
+        'global_step': checkpoint['global_step'],
+        'best_val_loss': checkpoint['best_val_loss'],
+        'patience_count': checkpoint['patience_count'],
+        'best_val_accuracy': checkpoint['best_val_accuracy'],
+    }
+
+    return model, optimizer, scheduler, training_state
     
 
 def initialize_model_from_scratch(args, mask_time_prob, device):
@@ -211,17 +202,15 @@ def initialize_model_from_scratch(args, mask_time_prob, device):
     # model = nn.DataParallel(model)
     model = HuBERT(config)
     model.to(device)
-    
+
+    optimizer = _create_optimizer(model, args.lr, args.weight_decay_mult)
+    scheduler = _create_scheduler(optimizer, args.training_steps)
+
     training_state = {
         'global_step': 0,
         'best_val_loss': float('inf'),
         'best_val_accuracy': 0.0,
         'patience_count': 0,
-        'optimizer_state': None,
-        'scheduler_state': None
     }
-
-    optimizer = _create_optimizer(model, args.lr, args.weight_decay_mult)
-    scheduler = _create_scheduler(optimizer, args.training_steps)
-
-    return model, training_state, optimizer, scheduler
+    
+    return model, optimizer, scheduler, training_state
