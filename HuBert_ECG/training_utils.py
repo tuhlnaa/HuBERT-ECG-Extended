@@ -2,6 +2,7 @@ import json
 import logging
 import torch
 import torch.nn as nn
+import torch.optim as optim
 
 from math import ceil
 from pathlib import Path
@@ -23,8 +24,12 @@ logger = logging.getLogger(__name__)
 
 # Constants
 DROPOUT_ADJUSTMENT = 0.05
-DROPOUT_RESET_VALUE = 0.1
 WEIGHT_DECAY_MULTIPLIER = 5.0
+EPS = 1E-09
+
+WARMUP_RATIO = 0.08
+DROPOUT_RESET_VALUE = 0.1
+MIN_WEIGHT_DECAY = 0.01
 
 
 def dynamic_regularizer(
@@ -61,17 +66,6 @@ def dynamic_regularizer(
                 module.p = max(module.p - DROPOUT_ADJUSTMENT, 0.1)
 
 
-def _load_json_config(filename: str) -> Dict[str, Any]:
-    """Load configuration from JSON file."""
-    config_path = Path(__file__).parents[1] / "configs" / filename
-    
-    if not config_path.exists():
-        raise FileNotFoundError(f"Config file not found: {config_path}")
-    
-    with open(config_path, 'r') as f:
-        return json.load(f)
-
-
 def _create_config_from_checkpoint(checkpoint, vocab_sizes):
     """Create appropriate config from checkpoint."""
     config = checkpoint['model_config']
@@ -85,6 +79,17 @@ def _create_config_from_checkpoint(checkpoint, vocab_sizes):
     return config
 
 
+def _load_json_config(filename: str) -> Dict[str, Any]:
+    """Load configuration from JSON file."""
+    config_path = Path(__file__).parents[1] / "configs" / filename
+    
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+    
+    with open(config_path, 'r') as f:
+        return json.load(f)
+
+
 def _ensure_min_dropout(model, min_dropout):
     """Ensure all dropout modules have at least the minimum dropout rate."""
     for name, module in model.named_modules():
@@ -92,7 +97,7 @@ def _ensure_min_dropout(model, min_dropout):
             module.p = max(min_dropout, module.p)
 
 
-def create_scheduler(optimizer, total_steps, warmup_ratio, 
+def _create_scheduler(optimizer, total_steps, warmup_ratio, 
                          current_step=0, previous_state=None):
     """Create learning rate scheduler with warmup."""
     num_warmup_steps = ceil(warmup_ratio * total_steps)
@@ -163,8 +168,22 @@ def resume_from_checkpoint(args, device):
         'optimizer_state': checkpoint['optimizer_state_dict'],
         'scheduler_state': checkpoint['scheduler_state_dict']
     }
+    weight_decay = max(0, 0.01 * args.weight_decay_mult)
+    optimizer = optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.98), eps=EPS, weight_decay=weight_decay)
 
-    return model, training_state
+    optimizer.load_state_dict(training_state['optimizer_state'])
+    optimizer.param_groups[0]['weight_decay'] = max(MIN_WEIGHT_DECAY, 
+                                                        optimizer.param_groups[0]['weight_decay'])
+    _ensure_min_dropout(model, DROPOUT_RESET_VALUE)
+
+    scheduler = _create_scheduler(
+        optimizer, 
+        args.training_steps, 
+        WARMUP_RATIO,
+        training_state['global_step'],
+        training_state.get('scheduler_state')
+    )
+    return model, training_state, optimizer, scheduler
     
 
 def initialize_model_from_scratch(args, mask_time_prob, device):
@@ -212,5 +231,14 @@ def initialize_model_from_scratch(args, mask_time_prob, device):
         'scheduler_state': None
     }
     
-    logger.info("Model built.")
-    return model, training_state
+    weight_decay = max(0, 0.01 * args.weight_decay_mult)
+    optimizer = optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.98), eps=EPS, weight_decay=weight_decay)
+    scheduler = _create_scheduler(
+        optimizer, 
+        args.training_steps, 
+        WARMUP_RATIO,
+        training_state['global_step'],
+        training_state.get('scheduler_state')
+    )
+
+    return model, training_state, optimizer, scheduler

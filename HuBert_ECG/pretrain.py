@@ -16,7 +16,7 @@ from config import create_training_parser, init_seeds
 from dataset import create_dataloader, validate_vocab_sizes
 from validator import validate_pretrain_model
 from training_utils import (
-    create_scheduler, 
+    _create_scheduler, 
     _ensure_min_dropout, 
     initialize_model_from_scratch, 
     resume_from_checkpoint, 
@@ -98,25 +98,9 @@ def train(args):
         epochs = args.epochs
 
     if args.resume_pretraining:
-        model, training_state = resume_from_checkpoint(args, device)
+        model, training_state, optimizer, scheduler = resume_from_checkpoint(args, device)
     else:
-        model, training_state = initialize_model_from_scratch(args, mask_time_prob, device)
-
-    optimizer = optim.AdamW(model.parameters(), lr=lr, betas=betas, eps=EPS, weight_decay=weight_decay)
-
-    if args.resume_pretraining:
-        optimizer.load_state_dict(training_state['optimizer_state'])
-        optimizer.param_groups[0]['weight_decay'] = max(MIN_WEIGHT_DECAY, 
-                                                         optimizer.param_groups[0]['weight_decay'])
-        _ensure_min_dropout(model, DROPOUT_RESET_VALUE)
-    
-    lr_scheduler = create_scheduler(
-        optimizer, 
-        args.training_steps, 
-        WARMUP_RATIO,
-        training_state['global_step'],
-        training_state.get('scheduler_state')
-    )
+        model, training_state, optimizer, scheduler = initialize_model_from_scratch(args, mask_time_prob, device)
 
     hubert = model
     global_step = training_state['global_step']
@@ -186,7 +170,7 @@ def train(args):
             # Gradient accumulation
             if global_step % accumulation_steps == 0:
                 scaler.step(optimizer)
-                lr_scheduler.step()
+                scheduler.step()
                 scaler.update()
                 optimizer.zero_grad()
 
@@ -241,7 +225,7 @@ def train(args):
                         "model_config": hubert.config,
                         "model_state_dict": copy.deepcopy(hubert.state_dict()),
                         "optimizer_state_dict": copy.deepcopy(optimizer.state_dict()),
-                        "scheduler_state_dict": copy.deepcopy(lr_scheduler.state_dict()),
+                        "scheduler_state_dict": copy.deepcopy(scheduler.state_dict()),
                         "best_val_loss": best_val_loss,
                         "best_val_accuracy": best_val_accuracy,
                         "pretraining_vocab_sizes": args.vocab_sizes,
