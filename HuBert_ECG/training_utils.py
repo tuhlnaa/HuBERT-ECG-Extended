@@ -8,7 +8,7 @@ from math import ceil
 from pathlib import Path
 from rich.logging import RichHandler
 from transformers import HubertConfig, get_linear_schedule_with_warmup
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 # from transformers.models.hubert.modeling_hubert import compute_mask_indices
 
 # Import custom modules
@@ -30,40 +30,6 @@ EPS = 1E-09
 WARMUP_RATIO = 0.08
 DROPOUT_RESET_VALUE = 0.1
 MIN_WEIGHT_DECAY = 0.01
-
-
-def dynamic_regularizer(
-    optimizer: torch.optim.Optimizer,
-    model: nn.Module,
-    penalty: bool,
-    param_group_idx: int = 0
-) -> None:
-    """
-    Dynamically adjust regularization strength based on training conditions.
-    
-    Args:
-        optimizer: PyTorch optimizer with weight_decay parameter
-        model: Neural network model containing dropout layers
-        penalty: If True, increase regularization; if False, decrease it
-        param_group_idx: Which parameter group to modify (default: 0)
-    """
-    # Adjust weight decay
-    current_wd = optimizer.param_groups[param_group_idx]['weight_decay']
-    
-    if penalty:
-        new_wd = min(current_wd * WEIGHT_DECAY_MULTIPLIER, 1.0)
-    else:
-        new_wd = max(current_wd / WEIGHT_DECAY_MULTIPLIER, 0.01)
-    
-    optimizer.param_groups[param_group_idx]['weight_decay'] = new_wd
-    
-    # Adjust dropout rates
-    for module in model.modules():
-        if isinstance(module, nn.Dropout):
-            if penalty:
-                module.p = min(module.p + DROPOUT_ADJUSTMENT, 0.9)
-            else:
-                module.p = max(module.p - DROPOUT_ADJUSTMENT, 0.1)
 
 
 def _create_config_from_checkpoint(checkpoint, vocab_sizes):
@@ -90,16 +56,33 @@ def _load_json_config(filename: str) -> Dict[str, Any]:
         return json.load(f)
 
 
-def _ensure_min_dropout(model, min_dropout):
+def _ensure_min_dropout(model: nn.Module, min_dropout: float) -> None:
     """Ensure all dropout modules have at least the minimum dropout rate."""
-    for name, module in model.named_modules():
-        if 'dropout' in name:
+    for module in model.modules():
+        if isinstance(module, nn.Dropout):
             module.p = max(min_dropout, module.p)
 
 
-def _create_scheduler(optimizer, total_steps, warmup_ratio, 
-                         current_step=0, previous_state=None):
-    """Create learning rate scheduler with warmup."""
+def _create_optimizer(model: nn.Module, learning_rate: float, weight_decay_mult: float) -> optim.AdamW:
+    """Create AdamW optimizer with specified parameters."""
+    weight_decay = max(0.0, 0.01 * weight_decay_mult)
+    return optim.AdamW(
+        model.parameters(),
+        lr=learning_rate,
+        betas=(0.9, 0.98),
+        eps=EPS,
+        weight_decay=weight_decay
+    )
+
+
+def _create_scheduler(
+    optimizer: optim.Optimizer,
+    total_steps: int,
+    warmup_ratio: float = WARMUP_RATIO,
+    current_step: int = 0,
+    previous_state: Optional[Dict] = None
+) -> Any:
+    """Create learning rate scheduler with warmup and optional state restoration."""
     num_warmup_steps = ceil(warmup_ratio * total_steps)
     
     if previous_state is not None:
@@ -132,7 +115,7 @@ def resume_from_checkpoint(args, device):
     checkpoint_name = model_path.split('/')[-1]
     logger.info(f"Loading checkpoint {checkpoint_name} to resume pretraining")
     
-    checkpoint = torch.load(model_path, map_location = 'cpu', weights_only=False)
+    checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
     
     # Validate checkpoint
     assert checkpoint['pretraining_vocab_sizes'] == args.vocab_sizes, \
@@ -145,10 +128,12 @@ def resume_from_checkpoint(args, device):
     model = HuBERT(config).to(device)
     model.load_state_dict(checkpoint['model_state_dict'])
     
-    # Handle iteration switch
+    # Handle iteration switch (using pretrained model for new iteration)
     if args.pretrained_path:
-        logger.info("Switching to another pretraining iteration: "
-                   "reinitializing label embedding and restoring dropouts...")
+        logger.info(
+            "Switching to another pretraining iteration: "
+            "reinitializing label embedding and restoring dropouts..."
+        )
         # Reinitialize label embeddings for new training iteration
         model.label_embedding = nn.ModuleList([
             nn.Embedding(vocab_size, model.config.classifier_proj_size)
@@ -156,7 +141,7 @@ def resume_from_checkpoint(args, device):
         ])
         # Reset dropout rates for encoder layers
         for name, module in model.named_modules():
-            if 'dropout' in name and 'encoder.layers' in name:
+            if isinstance(module, nn.Dropout) and 'encoder.layers' in name:
                 module.p = DROPOUT_RESET_VALUE
     
     # Prepare training state
@@ -168,12 +153,16 @@ def resume_from_checkpoint(args, device):
         'optimizer_state': checkpoint['optimizer_state_dict'],
         'scheduler_state': checkpoint['scheduler_state_dict']
     }
-    weight_decay = max(0, 0.01 * args.weight_decay_mult)
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.98), eps=EPS, weight_decay=weight_decay)
 
+    # Create and restore optimizer
+    optimizer = _create_optimizer(model, args.lr, args.weight_decay_mult)
     optimizer.load_state_dict(training_state['optimizer_state'])
-    optimizer.param_groups[0]['weight_decay'] = max(MIN_WEIGHT_DECAY, 
-                                                        optimizer.param_groups[0]['weight_decay'])
+
+    # Ensure minimum weight decay
+    for param_group in optimizer.param_groups:
+        param_group['weight_decay'] = max(MIN_WEIGHT_DECAY, param_group['weight_decay'])
+    
+    # Ensure minimum dropout
     _ensure_min_dropout(model, DROPOUT_RESET_VALUE)
 
     scheduler = _create_scheduler(
@@ -183,6 +172,7 @@ def resume_from_checkpoint(args, device):
         training_state['global_step'],
         training_state.get('scheduler_state')
     )
+
     return model, training_state, optimizer, scheduler
     
 
@@ -230,15 +220,8 @@ def initialize_model_from_scratch(args, mask_time_prob, device):
         'optimizer_state': None,
         'scheduler_state': None
     }
-    
-    weight_decay = max(0, 0.01 * args.weight_decay_mult)
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.98), eps=EPS, weight_decay=weight_decay)
-    scheduler = _create_scheduler(
-        optimizer, 
-        args.training_steps, 
-        WARMUP_RATIO,
-        training_state['global_step'],
-        training_state.get('scheduler_state')
-    )
+
+    optimizer = _create_optimizer(model, args.lr, args.weight_decay_mult)
+    scheduler = _create_scheduler(optimizer, args.training_steps)
 
     return model, training_state, optimizer, scheduler

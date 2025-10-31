@@ -3,7 +3,7 @@ import logging
 import torch
 import wandb
 import numpy as np
-import torch.optim as optim
+import torch.nn as nn
 
 from loguru import logger
 from pathlib import Path
@@ -15,13 +15,7 @@ from torch.nn import functional as F
 from config import create_training_parser, init_seeds
 from dataset import create_dataloader, validate_vocab_sizes
 from validator import validate_pretrain_model
-from training_utils import (
-    _create_scheduler, 
-    _ensure_min_dropout, 
-    initialize_model_from_scratch, 
-    resume_from_checkpoint, 
-    dynamic_regularizer
-)
+from training_utils import initialize_model_from_scratch, resume_from_checkpoint
 
 # Configure logging
 logging.basicConfig(
@@ -41,6 +35,40 @@ SELF_SUPERVISED_MODEL_CKPT_PATH = "output/checkpoints/self-supervised/"
 WARMUP_RATIO = 0.08
 DROPOUT_RESET_VALUE = 0.1
 MIN_WEIGHT_DECAY = 0.01
+
+
+def dynamic_regularizer(
+    optimizer: torch.optim.Optimizer,
+    model: nn.Module,
+    penalty: bool,
+    param_group_idx: int = 0
+) -> None:
+    """
+    Dynamically adjust regularization strength based on training conditions.
+    
+    Args:
+        optimizer: PyTorch optimizer with weight_decay parameter
+        model: Neural network model containing dropout layers
+        penalty: If True, increase regularization; if False, decrease it
+        param_group_idx: Which parameter group to modify (default: 0)
+    """
+    # Adjust weight decay
+    current_wd = optimizer.param_groups[param_group_idx]['weight_decay']
+    
+    if penalty:
+        new_wd = min(current_wd * WEIGHT_DECAY_MULTIPLIER, 1.0)
+    else:
+        new_wd = max(current_wd / WEIGHT_DECAY_MULTIPLIER, 0.01)
+    
+    optimizer.param_groups[param_group_idx]['weight_decay'] = new_wd
+    
+    # Adjust dropout rates
+    for module in model.modules():
+        if isinstance(module, nn.Dropout):
+            if penalty:
+                module.p = min(module.p + DROPOUT_ADJUSTMENT, 0.9)
+            else:
+                module.p = max(module.p - DROPOUT_ADJUSTMENT, 0.1)
 
 
 def train(args):
