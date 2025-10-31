@@ -80,7 +80,7 @@ def create_dataloader(
         pin_memory=True,
         drop_last=drop_last,
     )
-    print(f"Dataset samples: {len(dataset)}, DataLoader batches: {len(data_loader)}")
+    logger.info(f"Dataset samples: {len(dataset)}, DataLoader batches: {len(data_loader)}")
 
     return data_loader
 

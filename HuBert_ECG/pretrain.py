@@ -139,14 +139,19 @@ def train(args):
 
         train_losses = []
         
-        for ecg, attention_mask, ensemble_labels in tqdm(train_loader, total=len(train_loader)):
+        # Store the tqdm iterator in a variable
+        pbar = tqdm(train_loader, total=len(train_loader))
+
+        for ecg, attention_mask, ensemble_labels in pbar:
             global_step += 1
             
             # Move data to device
             ecg = ecg.to(device) 
             attention_mask = attention_mask.to(device)
             ensemble_labels = ensemble_labels.to(device)
-            
+
+            hubert.train()
+
             with torch.amp.autocast('cuda'):
                 # Forward pass
                 encoder_output = hubert(
@@ -182,6 +187,9 @@ def train(args):
             scaler.scale(loss).backward()
             train_losses.append(loss.item())
 
+            # Update progress bar with global_step and loss
+            pbar.set_postfix({'global_step': global_step})
+
             # Gradient accumulation
             if global_step % accumulation_steps == 0:
                 scaler.step(optimizer)
@@ -200,19 +208,13 @@ def train(args):
                 train_losses.clear()
 
                 # Logging
-                logger.info(f"Step: {global_step}")
-                logger.info(f"train_loss: {train_loss}")
-                logger.info(f"val_loss: {val_loss}")
-                logger.info(f"val_accuracy: {val_accuracy}")
-                
+                logger.info(f"Step: {global_step}, train_loss: {train_loss:.4f}, val_loss: {val_loss:.4f}, val_accuracy: {val_accuracy:.4f}")
                                                                         
                 wandb.log({
                     f"train_loss": train_loss,
                     f"val_loss": val_loss,
                     "val_accuracy": val_accuracy
                 }, step=global_step)
-
-                hubert.train()
 
                 checkpoint_path = Path(SELF_SUPERVISED_MODEL_CKPT_PATH)
                 checkpoint_path.mkdir(parents=True, exist_ok=True)

@@ -165,16 +165,15 @@ def _resume_from_checkpoint(args, device):
     
     # Prepare training state
     training_state = {
-        'global_step': checkpoint['global_step'] if is_same_iteration else 0,
-        'best_val_loss': checkpoint['best_val_loss'] if is_same_iteration else float('inf'),
-        'patience_count': checkpoint['patience_count'] if is_same_iteration else 0,
-        'best_val_accuracy': checkpoint['best_val_accuracy'] if is_same_iteration else 0.0,
+        'global_step': checkpoint['global_step'],
+        'best_val_loss': checkpoint['best_val_loss'],
+        'patience_count': checkpoint['patience_count'],
+        'best_val_accuracy': checkpoint['best_val_accuracy'],
         'is_same_iteration': is_same_iteration,
-        'optimizer_state': checkpoint.get('optimizer_state_dict'),
-        'lr_scheduler_state': checkpoint.get('lr_scheduler_state_dict') if is_same_iteration else None
+        'optimizer_state': checkpoint['optimizer_state_dict'],
+        'lr_scheduler_state': checkpoint['lr_scheduler_state_dict']
     }
     
-    logger.info("Checkpoint loaded.")
     return model, training_state
 
 

@@ -66,8 +66,6 @@ def validate_pretrain_model(model, val_loader, device, logger, global_step):
     val_losses = []
     val_accuracies = []
     
-    logger.info(f"Validating model at step {global_step}...")
-    
     with torch.no_grad():
         for ecg, _, ensemble_labels in tqdm(val_loader, total=len(val_loader)):
             ecg, ensemble_labels = ecg.to(device), ensemble_labels.to(device)
