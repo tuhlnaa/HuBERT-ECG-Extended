@@ -16,7 +16,6 @@ python ./HuBert_ECG/kmeans_clustering.py /path/to/dataset.csv /path/to/features 
 # Evaluate trained model
 python ./HuBert_ECG/kmeans_clustering.py /path/to/dataset.csv /path/to/features 1 32 --model_path kmeans_500_morphology_sse8e+05.pkl
 """
-
 import joblib
 import logging
 import wandb
@@ -29,7 +28,7 @@ from sklearn.preprocessing import Normalizer
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from sklearn.metrics import calinski_harabasz_score, davies_bouldin_score
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 # Import custom modules
 from config import create_clustering_parser, init_seeds
@@ -132,8 +131,51 @@ def load_and_normalize_features(
     return normalizer.transform(features)
 
 
+def compute_clustering_metrics(
+    model: MiniBatchKMeans,
+    dataloader: DataLoader,
+    feature_dir: Path,
+    normalizer: Normalizer,
+    desc: str = "Computing metrics"
+) -> Dict[str, float]:
+    """Compute clustering evaluation metrics.
+    
+    Args:
+        model: Trained k-means model
+        dataloader: DataLoader for the dataset
+        feature_dir: Directory containing feature files
+        normalizer: Normalizer for features
+        desc: Description for progress bar
+        
+    Returns:
+        Dictionary containing average DB score, CH score, and SSE
+    """
+    db_scores = []
+    ch_scores = []
+    batch_sses = []
+    
+    for _, filenames in tqdm(dataloader, total=len(dataloader), desc=desc):
+        features = load_and_normalize_features(filenames, feature_dir, normalizer)
+        assignments = model.predict(features)
+        
+        # Compute metrics
+        db_scores.append(davies_bouldin_score(features, assignments))
+        ch_scores.append(calinski_harabasz_score(features, assignments))
+        
+        # Compute batch SSE (not use model.inertia_)
+        centers = model.cluster_centers_[assignments]
+        batch_sse = np.sum((features - centers) ** 2)
+        batch_sses.append(batch_sse)
+    
+    return {
+        "db_score": np.mean(db_scores),
+        "ch_score": np.mean(ch_scores),
+        "sse": np.sum(batch_sses)
+    }
+
+
 def cluster(args) -> None:
-    """Perform k-means clustering on ECG features.
+    """Perform k-means clustering on ECG features with train and validation evaluation.
     
     Args:
         args: Arguments from argument parser containing clustering configuration
@@ -141,18 +183,36 @@ def cluster(args) -> None:
     group = f"clustering_iteration_{args.train_iteration}"
     wandb.init(project="HuBert ECG", group=group, entity=None)
     
-    dataset = ECGDataset(
-        path_to_dataset_csv=args.path_to_dataset_csv,
+    # Create train dataset
+    train_dataset = ECGDataset(
+        path_to_dataset_csv=args.path_to_dataset_csv_train,
         ecg_dir_path=args.in_dir,
         pretrain=False,
         encode=True
     )
     
-    dataloader = DataLoader(
-        dataset,
+    train_dataloader = DataLoader(
+        train_dataset,
         batch_size=args.batch_size,
         num_workers=0,
         shuffle=True,
+        pin_memory=True,
+        drop_last=True
+    )
+    
+    # Create validation dataset
+    val_dataset = ECGDataset(
+        path_to_dataset_csv=args.path_to_dataset_csv_val,
+        ecg_dir_path=args.in_dir,
+        pretrain=False,
+        encode=True
+    )
+    
+    val_dataloader = DataLoader(
+        val_dataset,
+        batch_size=args.batch_size,
+        num_workers=0,
+        shuffle=False,
         pin_memory=True,
         drop_last=True
     )
@@ -173,17 +233,42 @@ def cluster(args) -> None:
         model_path = initial_model_path if global_step == 1 else None
         model = create_kmeans_model(n_clusters, args.batch_size, model_path)
         
-        # Fitting loop
-        for _, filenames in tqdm(dataloader, total=len(dataloader), desc=f"k={n_clusters}"):
+        # Training loop
+        for _, filenames in tqdm(train_dataloader, total=len(train_dataloader), desc=f"Training k={n_clusters}"):
             features = load_and_normalize_features(filenames, feature_dir, normalizer)
             model.partial_fit(features)
         
-        # Log and save results
-        sse = model.inertia_
-        wandb.log({"k": n_clusters, "SSE": sse}, step=n_clusters)
+        # Evaluate on training set
+        logger.info("Evaluating on training set...")
+        train_metrics = compute_clustering_metrics(
+            model, train_dataloader, feature_dir, normalizer, 
+            desc="Train evaluation"
+        )
         
+        # Evaluate on validation set
+        logger.info("Evaluating on validation set...")
+        val_metrics = compute_clustering_metrics(
+            model, val_dataloader, feature_dir, normalizer,
+            desc="Val evaluation"
+        )
+        
+        # Log metrics to W&B
+        wandb.log({
+            "train_sse": train_metrics["sse"],
+            "train_db_score": train_metrics["db_score"],
+            "train_ch_score": train_metrics["ch_score"],
+            "val_sse": val_metrics["sse"],
+            "val_db_score": val_metrics["db_score"],
+            "val_ch_score": val_metrics["ch_score"]
+        }, step=n_clusters)
+        
+        # Log results
+        logger.info(f"Train - SSE: {train_metrics['sse']:.2f}, DB: {train_metrics['db_score']:.4f}, CH: {train_metrics['ch_score']:.2f}")
+        logger.info(f"Val   - SSE: {val_metrics['sse']:.2f}, DB: {val_metrics['db_score']:.4f}, CH: {val_metrics['ch_score']:.2f}")
+        
+        # Save model with validation SSE in filename
         model_filename = generate_model_filename(
-            n_clusters, args.train_iteration, args.layer, sse
+            n_clusters, args.train_iteration, args.layer, val_metrics["sse"]
         )
         joblib.dump(model, model_filename)
         logger.info(f"Saved model to {model_filename}")
@@ -192,7 +277,7 @@ def cluster(args) -> None:
 
 
 def evaluate_clustering(args) -> None:
-    """Evaluate a trained clustering model using Davies-Bouldin and Calinski-Harabasz scores.
+    """Evaluate a trained clustering model using Davies-Bouldin, Calinski-Harabasz scores, and SSE.
     
     Args:
         args: Arguments from argument parser containing evaluation configuration
@@ -201,7 +286,7 @@ def evaluate_clustering(args) -> None:
     logger.info(f"Evaluating clustering model: {model_path.name}")
     
     dataset = ECGDataset(
-        path_to_dataset_csv=args.path_to_dataset_csv,
+        path_to_dataset_csv=args.path_to_dataset_csv_val,
         ecg_dir_path=args.in_dir,
         pretrain=False,
         encode=True
@@ -220,19 +305,15 @@ def evaluate_clustering(args) -> None:
     normalizer = Normalizer()
     feature_dir = Path(args.in_dir)
     
-    db_scores = []
-    ch_scores = []
+    # Compute all metrics
+    metrics = compute_clustering_metrics(
+        model, dataloader, feature_dir, normalizer,
+        desc="Evaluating"
+    )
     
-    for _, filenames in tqdm(dataloader, total=len(dataloader), desc="Evaluating"):
-        features = load_and_normalize_features(filenames, feature_dir, normalizer)
-        assignments = model.predict(features)
-        
-        db_scores.append(davies_bouldin_score(features, assignments))
-        ch_scores.append(calinski_harabasz_score(features, assignments))
-    
-    logger.info(f"Average Davies-Bouldin score: {np.mean(db_scores):.4f} (lower is better)")
-    logger.info(f"Average Calinski-Harabasz score: {np.mean(ch_scores):.4f} (higher is better)")
-
+    logger.info(f"Sum of Squared Errors (SSE): {metrics['sse']:.2f}")
+    logger.info(f"Average Davies-Bouldin score: {metrics['db_score']:.4f} (lower is better)")
+    logger.info(f"Average Calinski-Harabasz score: {metrics['ch_score']:.4f} (higher is better)")
 
 def main() -> None:
     """Main entry point for clustering script."""

@@ -6,7 +6,8 @@ rem This script demonstrates the parameter structure for the clustering utility
 rem More useful information available with: python clustering.py --help
 
 rem Configuration
-set "PATH_TO_CSV=./reproducibility/ptb/ptb_train_0.csv"
+set "PATH_TO_DATASET_CSV_TRAIN=./data/label/ptb/ptb_train_0.csv"
+set "PATH_TO_DATASET_CSV_VAL=./data/label/ptb/ptb_test_0.csv"
 set "IN_DIR=./output/PTB_mfcc_only"
 set "TRAIN_ITERATION=1"
 set "BATCH_SIZE=32"
@@ -24,28 +25,27 @@ rem Print header
 echo === HuBERT-ECG Clustering Pipeline ===
 echo Starting execution at %date% %time%
 
-@REM rem Cluster morphological features (iteration 1)
-@REM echo.
-@REM echo [EXECUTING] Clustering morphological features (iteration 1)...
-@REM python HuBert_ECG/kmeans_clustering.py %PATH_TO_CSV% %IN_DIR% %TRAIN_ITERATION% %BATCH_SIZE% ^
-@REM     --cluster ^
-@REM     --n_clusters_start=%N_CLUSTERS_START% ^
-@REM     --n_clusters_end=%N_CLUSTERS_END% ^
-@REM     --step=%STEP%
-
-rem Evaluate a clustering model (iteration 1)
+rem Cluster morphological features (iteration 1)
 echo.
-echo [EXECUTING] Evaluating clustering model...
-set "TRAIN_ITERATION=1"
-python HuBert_ECG/kmeans_clustering.py %PATH_TO_CSV% %IN_DIR% %TRAIN_ITERATION% %BATCH_SIZE% ^
-    --model_path=%MODEL_PATH%
+echo [EXECUTING] Clustering morphological features (iteration 1)...
+python HuBert_ECG/kmeans_clustering.py %PATH_TO_DATASET_CSV_TRAIN% %PATH_TO_DATASET_CSV_VAL% ^
+    %IN_DIR% %TRAIN_ITERATION% %BATCH_SIZE% ^
+    --cluster ^
+    --n_clusters_start=%N_CLUSTERS_START% ^
+    --n_clusters_end=%N_CLUSTERS_END% ^
+    --step=%STEP%
 
-
+@REM rem Evaluate a clustering model (iteration 1)
+@REM echo.
+@REM echo [EXECUTING] Evaluating clustering model...
+@REM set "TRAIN_ITERATION=1"
+@REM python HuBert_ECG/kmeans_clustering.py %PATH_TO_DATASET_CSV_TRAIN% %IN_DIR% %TRAIN_ITERATION% %BATCH_SIZE% ^
+@REM     --model_path=%MODEL_PATH%
 
 @REM rem Resume clustering from a saved model (iteration 1)
 @REM echo.
 @REM echo [EXECUTING] Resuming clustering from saved model...
-@REM python clustering.py %PATH_TO_CSV% %IN_DIR% %TRAIN_ITERATION% %BATCH_SIZE% ^
+@REM python clustering.py %PATH_TO_DATASET_CSV_TRAIN% %IN_DIR% %TRAIN_ITERATION% %BATCH_SIZE% ^
 @REM     --cluster ^
 @REM     --n_clusters_start=100 ^
 @REM     --n_clusters_end=%N_CLUSTERS_END% ^
@@ -56,7 +56,7 @@ python HuBert_ECG/kmeans_clustering.py %PATH_TO_CSV% %IN_DIR% %TRAIN_ITERATION% 
 @REM echo.
 @REM echo [EXECUTING] Clustering latent features (iteration 2+)...
 @REM set "TRAIN_ITERATION=2"
-@REM python clustering.py %PATH_TO_CSV% %IN_DIR% %TRAIN_ITERATION% %BATCH_SIZE% ^
+@REM python clustering.py %PATH_TO_DATASET_CSV_TRAIN% %IN_DIR% %TRAIN_ITERATION% %BATCH_SIZE% ^
 @REM     --cluster ^
 @REM     --n_clusters_start=%N_CLUSTERS_START% ^
 @REM     --n_clusters_end=%N_CLUSTERS_END% ^
@@ -68,7 +68,7 @@ python HuBert_ECG/kmeans_clustering.py %PATH_TO_CSV% %IN_DIR% %TRAIN_ITERATION% 
 @REM echo [EXECUTING] Evaluating clustering model (iteration 2+)...
 @REM set "TRAIN_ITERATION=2"
 @REM set "MODEL_PATH=./k_means_100_encoder_1_2_5e+05.pkl"
-@REM python clustering.py %PATH_TO_CSV% %IN_DIR% %TRAIN_ITERATION% %BATCH_SIZE% ^
+@REM python clustering.py %PATH_TO_DATASET_CSV_TRAIN% %IN_DIR% %TRAIN_ITERATION% %BATCH_SIZE% ^
 @REM     --model_path=%MODEL_PATH% ^
 @REM     --layer=%LAYER%
 

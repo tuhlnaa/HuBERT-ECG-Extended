@@ -315,10 +315,6 @@ def validate_dumping_args(args):
     """Validate argument combinations and constraints."""
     errors = []
     
-    # Validate train_iteration range
-    if args.train_iteration < 1 or args.train_iteration > 3:
-        errors.append(f"train_iteration must be 1, 2 or 3. Got {args.train_iteration}")
-    
     # Validate percentage ranges
     if not (0 <= args.start_perc <= 1):
         errors.append(f"start_perc must be in [0, 1] range. Got {args.start_perc}")
@@ -379,7 +375,8 @@ def create_clustering_parser():
     
     # Required arguments
     required = parser.add_argument_group('required arguments')
-    required.add_argument("path_to_dataset_csv", type=str, help="Path to the dataset in csv format to use")
+    required.add_argument("path_to_dataset_csv_train", type=str, help="Path to the csv file containing the training dataset")
+    required.add_argument("path_to_dataset_csv_val", type=str, help="Path to the csv file containing the validation dataset")
     required.add_argument("in_dir", type=str, help="Path to the directory containing the features to cluster")
     required.add_argument("train_iteration", type=int, help="Iteration of the training")
     required.add_argument("batch_size", type=int, help="Batch size")
