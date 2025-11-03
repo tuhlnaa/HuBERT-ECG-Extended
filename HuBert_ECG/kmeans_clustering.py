@@ -33,6 +33,7 @@ from typing import List, Optional, Dict
 # Import custom modules
 from config import create_clustering_parser, init_seeds
 from dataset import ECGDataset
+from logging_utils import ClearMLLogger, SimplePhasedMetricHandler
 
 # Constants
 NUM_ECG_TOKENS = 93  # Number of ECG embeddings/tokens before the Transformer
@@ -180,9 +181,29 @@ def cluster(args) -> None:
     Args:
         args: Arguments from argument parser containing clustering configuration
     """
+    save_dir = Path(f"{args.output_dir}/sklearn-model")
+    save_dir.mkdir(parents=True, exist_ok=True)
+
     group = f"clustering_iteration_{args.train_iteration}"
     wandb.init(project="HuBert ECG", group=group, entity=None)
+
+    clearml_config = {
+        'project': "HuBERT-ECG",  # ClearML project name
+        'task_name': "HuBERT-ECG clustering",  
+        'task_type': "training",  # ClearML task type
+        'reuse_last_task_id': False,  # ClearML task ID to resume or boolean flag
+        "tags": ["clustering"],  # List of tags for ClearML task
+    }
+
+    # ClearML uses 1337 as the default initial seed
+    clearml_logger = ClearMLLogger(args.output_dir, **clearml_config)
+    clearml_logger.register_handler(SimplePhasedMetricHandler(['sse', 'db_score', 'ch_score']))
+
+    # Upload args as JSON
+    clearml_logger.log_args_as_json(args)
     
+    init_seeds(seed=RANDOM_SEED)
+
     # Create train dataset
     train_dataset = ECGDataset(
         path_to_dataset_csv=args.path_to_dataset_csv_train,
@@ -262,6 +283,15 @@ def cluster(args) -> None:
             "val_ch_score": val_metrics["ch_score"]
         }, step=n_clusters)
         
+        clearml_logger.log_metrics({
+            "train_sse": train_metrics["sse"],
+            "train_db_score": train_metrics["db_score"],
+            "train_ch_score": train_metrics["ch_score"],
+            "val_sse": val_metrics["sse"],
+            "val_db_score": val_metrics["db_score"],
+            "val_ch_score": val_metrics["ch_score"]
+        }, n_clusters)
+
         # Log results
         logger.info(f"Train - SSE: {train_metrics['sse']:.2f}, DB: {train_metrics['db_score']:.4f}, CH: {train_metrics['ch_score']:.2f}")
         logger.info(f"Val   - SSE: {val_metrics['sse']:.2f}, DB: {val_metrics['db_score']:.4f}, CH: {val_metrics['ch_score']:.2f}")
@@ -270,7 +300,7 @@ def cluster(args) -> None:
         model_filename = generate_model_filename(
             n_clusters, args.train_iteration, args.layer, val_metrics["sse"]
         )
-        joblib.dump(model, model_filename)
+        joblib.dump(model, save_dir / model_filename)
         logger.info(f"Saved model to {model_filename}")
         
         n_clusters += args.step
@@ -282,6 +312,7 @@ def evaluate_clustering(args) -> None:
     Args:
         args: Arguments from argument parser containing evaluation configuration
     """
+    init_seeds(seed=RANDOM_SEED)
     model_path = Path(args.model_path)
     logger.info(f"Evaluating clustering model: {model_path.name}")
     
@@ -315,11 +346,11 @@ def evaluate_clustering(args) -> None:
     logger.info(f"Average Davies-Bouldin score: {metrics['db_score']:.4f} (lower is better)")
     logger.info(f"Average Calinski-Harabasz score: {metrics['ch_score']:.4f} (higher is better)")
 
+
 def main() -> None:
     """Main entry point for clustering script."""
     args = create_clustering_parser()
-    init_seeds(seed=RANDOM_SEED)
-    
+
     if args.cluster:
         cluster(args)
     else:

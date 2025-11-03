@@ -2,26 +2,89 @@ import json
 
 from clearml import Task
 from pathlib import Path
-from typing import Dict, Union, Optional
+from typing import Dict, Union, Optional, Tuple
 
 
-class ClearMLLogger():
-    """ClearML logging implementation."""
+class MetricHandler:
+    """Base class for metric handling strategies."""
     
+    def can_handle(self, metric_name: str) -> bool:
+        """Check if this handler can process the metric."""
+        raise NotImplementedError
+    
+    def parse(self, metric_name: str) -> Tuple[str, str]:
+        """Parse metric name into (title, series)."""
+        raise NotImplementedError
+
+
+class LearningRateHandler(MetricHandler):
+    def can_handle(self, metric_name: str) -> bool:
+        return metric_name == 'learning_rate'
+    
+    def parse(self, metric_name: str) -> Tuple[str, str]:
+        return "Learning Rate", "LR"
+
+
+class ClassMetricHandler(MetricHandler):
+    """Handles per-class metrics like val_f1-score_class_0."""
+    
+    def can_handle(self, metric_name: str) -> bool:
+        return 'class' in metric_name and metric_name.startswith(('train_', 'val_'))
+    
+    def parse(self, metric_name: str) -> Tuple[str, str]:
+        # e.g., "val_f1-score_class_0" -> title="val_f1-score_class", series="class_0"
+        title = metric_name.rsplit('_', 1)[0]
+        series = metric_name.split('_', 1)[1]
+        return title, series
+
+
+class SimplePhasedMetricHandler(MetricHandler):
+    """Handles metrics like train_loss, val_loss, train_sse, etc."""
+    
+    def __init__(self, metric_names: list):
+        self.metric_names = metric_names
+    
+    def can_handle(self, metric_name: str) -> bool:
+        for name in self.metric_names:
+            if metric_name in [f'train_{name}', f'val_{name}']:
+                return True
+        return False
+    
+    def parse(self, metric_name: str) -> Tuple[str, str]:
+        phase = 'Training' if metric_name.startswith('train_') else 'Validation'
+        metric = metric_name.replace('train_', '').replace('val_', '')
+        return metric, phase
+
+
+class MacroMetricHandler(MetricHandler):
+    """Handles metrics with _macro suffix."""
+    
+    def can_handle(self, metric_name: str) -> bool:
+        return '_macro' in metric_name and metric_name.startswith(('train_', 'val_'))
+    
+    def parse(self, metric_name: str) -> Tuple[str, str]:
+        phase = 'Training' if metric_name.startswith('train_') else 'Validation'
+        metric = metric_name.replace('train_', '').replace('val_', '').replace('_macro', '')
+        return metric, phase
+
+
+class ClearMLLogger:
+    """ClearML logging implementation with extensible metric handling."""
+   
     def __init__(
-        self, 
-        output_dir: Union[str, Path], 
-        project: str, 
-        task_name: Optional[str] = None, 
+        self,
+        output_dir: Union[str, Path],
+        project: str,
+        task_name: Optional[str] = None,
         task_type: Optional[str] = "training",
-        reuse_last_task_id: Optional[str] = None, 
+        reuse_last_task_id: Optional[str] = None,
         tags: Optional[list] = None,
     ):
         super().__init__()
         self.output_dir = Path(output_dir)
         self.log_dir = self.output_dir / "logs"
         self.log_dir.mkdir(parents=True, exist_ok=True)
-        
+       
         # Initialize ClearML task
         self.task = Task.init(
             project_name=project,
@@ -34,83 +97,55 @@ class ClearMLLogger():
         )
         self.task.set_initial_iteration(offset=0)
 
-        # Store the logger for easy access
         self.logger = self.task.get_logger()
 
-        # Force iteration-based reporting with a dummy metric
-        # Do this early in your script, before any time-consuming operations
+        # Force iteration-based reporting
         self.logger.report_scalar(
-            title="dummy", 
-            series="force_iteration_reporting", 
-            iteration=0, 
+            title="dummy",
+            series="force_iteration_reporting",
+            iteration=0,
             value=0.0
         )
 
-        # Create output directories
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Initialize metric handlers (order matters - first match wins)
+        self._metric_handlers = [
+            LearningRateHandler(),
+            # MacroMetricHandler(),
+            # ClassMetricHandler(),
+            # SimplePhasedMetricHandler(['loss', 'sse', 'db_score', 'ch_score']),
+            # SimplePhasedMetricHandler(['grad_clip_ratio', 'exploding_grad_ratio', 'vanishing_grad_ratio']),
+        ]
+
+
+    def register_handler(self, handler: MetricHandler) -> None:
+        """Add a custom metric handler."""
+        self._metric_handlers.insert(0, handler)  # Add at beginning for priority
 
 
     def log_metrics(self, metrics: Dict[str, float], step: int, mode: str = 'train') -> None:
         """
         Log metrics to ClearML with organized grouping.
-        
+       
         Args:
             metrics: Dictionary of metrics to log
             step: Current training step
             mode: Mode of operation ('train' or 'val')
         """
         for name, value in metrics.items():
-            # Handle learning rate specially
-            if name == 'learning_rate':
-                self.logger.report_scalar(
-                    title="Learning Rate", 
-                    series="LR", 
-                    value=value,
-                    iteration=step
-                )
-                continue
-                
-            # Split into appropriate paths based on metric name
-            if name.startswith(('train_', 'val_')):
-                phase = 'Training' if name.startswith('train_') else 'Validation'
-                metric_name = name.replace('train_', '').replace('val_', '')
-
-                if metric_name == 'loss':
-                    title = metric_name
-                    series = phase
-                elif '_macro' in metric_name:
-                    title = metric_name.replace('_macro', '')  # e.g. f1-score
-                    series = phase  # e.g. "Validation"
-                elif "class" in metric_name:
-                    title = name.rsplit('_', 1)[0]  # e.g. "val_f1-score_class"
-                    series = metric_name.split('_', 1)[1]   # e.g. "class_0"
-                else:
-                    continue
-
-                # elif metric_name == "grad_clip_ratio" or metric_name == "exploding_grad_ratio" or metric_name == "vanishing_grad_ratio":
-                #     title = "grad_ratio"
-                #     series = metric_name
-                # elif "grad" in metric_name:
-                #     title = "grad"
-                #     series = metric_name
-                    
-                self.logger.report_scalar(
-                    title=title,
-                    series=series,
-                    value=value,
-                    iteration=step
-                )
-            else:
-                pass
-
-                # # If no prefix, use the provided mode
-                # title = 'Training' if mode == 'train' else 'Validation'
-                # self.logger.report_scalar(
-                #     title=title,
-                #     series=name,
-                #     value=value,
-                #     iteration=step
-                # )
+            # Find appropriate handler
+            for handler in self._metric_handlers:
+                if handler.can_handle(name):
+                    title, series = handler.parse(name)
+                    self.logger.report_scalar(
+                        title=title,
+                        series=series,
+                        value=value,
+                        iteration=step
+                    )
+                    break
+            # If no handler matched, silently skip (or log warning if desired)
 
 
     def log_args_as_json(self, args) -> None:

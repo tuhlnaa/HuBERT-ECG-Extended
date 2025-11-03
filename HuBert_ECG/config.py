@@ -392,6 +392,7 @@ def create_clustering_parser():
     # Model and layer arguments
     parser.add_argument("--model_path", type=str, default=None, help="Path to the model to evaluate or to load in order to resume clustering")
     parser.add_argument("--layer", type=int, default=None, help="In case train_iteration >= 2, which hidden layer latents were extracted from")
+    parser.add_argument('--output_dir', type=str, default="./output", help='Path to save model and results')
     
     args = parser.parse_args()
     
