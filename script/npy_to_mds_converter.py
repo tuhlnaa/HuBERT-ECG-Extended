@@ -6,13 +6,21 @@ for efficient data loading and streaming. Supports filtering by year based
 on the filename date format.
 """
 
+import argparse
 import json
+import sys
 import numpy as np
 
 from pathlib import Path
 from streaming import MDSWriter
-from tqdm import tqdm
+from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, BarColumn, TextColumn
 from typing import Optional, Dict, Any
+
+# Import custom modules
+PROJECT_ROOT = Path(__file__).parents[1]
+sys.path.append(str(PROJECT_ROOT))
+
+from HuBert_ECG.config import RichPrinter
 
 
 def parse_filename(filename: str) -> Dict[str, Any]:
@@ -92,7 +100,7 @@ def convert_to_mds(
         'ecg_data': 'ndarray:float32'
     }
 
-    # Create MDS writer
+    # Create MDS writer with rich progress bar
     with MDSWriter(
         out=output_path.as_posix(),
         columns=columns,
@@ -100,31 +108,42 @@ def convert_to_mds(
         size_limit=str(shard_size_mb) + "mb"
     ) as writer:
         
-        # Process each file
-        for npy_file in tqdm(npy_files, desc="Converting to MDS"):
-            try:
-                ecg_data = np.load(npy_file)
-            except Exception as e:
-                print(f"Error loading {npy_file}: {e}")
-                ecg_data = None
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("({task.completed}/{task.total})"),
+            TimeElapsedColumn(),
+        ) as progress:
+            
+            task_id = progress.add_task("[cyan]Converting to MDS", total=len(npy_files))
+            
+            # Process each file
+            for npy_file in npy_files:
+                try:
+                    ecg_data = np.load(npy_file)
+                except Exception as e:
+                    print(f"Error loading {npy_file}: {e}")
+                    ecg_data = None
 
-            if ecg_data is None:
-                continue
-            
-            # Parse filename metadata
-            metadata = parse_filename(npy_file.name)
-            
-            # Create sample dictionary
-            sample = {
-                'filename': metadata['filename'],
-                'date': metadata.get('date', ''),
-                'year': metadata.get('year', 0),
-                'channel_labels': channel_labels,
-                'ecg_data': ecg_data
-            }
-            
-            # Write sample to MDS
-            writer.write(sample)
+                if ecg_data is not None:
+                    # Parse filename metadata
+                    metadata = parse_filename(npy_file.name)
+                    
+                    # Create sample dictionary
+                    sample = {
+                        'filename': metadata['filename'],
+                        'date': metadata.get('date', ''),
+                        'year': metadata.get('year', 0),
+                        'channel_labels': channel_labels,
+                        'ecg_data': ecg_data
+                    }
+                    
+                    # Write sample to MDS
+                    writer.write(sample)
+                
+                progress.update(task_id, advance=1)
     
     print(f"\nConversion complete!")
     print(f"Output saved to: {output_path}")
@@ -147,35 +166,32 @@ def convert_to_mds(
     print(f"Metadata saved to: {metadata_file}")
 
 
-def main():
-    """Main function with example usage."""
-    import argparse
-    
+def parse_args() -> argparse.Namespace:
+    """Parse command line arguments."""
     parser = argparse.ArgumentParser(
         description='Convert ECG .npy files to MDS format',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
+    # Required arguments
     parser.add_argument('--input_dir', type=str, required=True, help='Directory containing .npy files')
     parser.add_argument('--output_dir', type=str, required=True, help='Directory to save MDS files')
+
+    # Optional arguments
     parser.add_argument('--year', type=int, default=None, help='Filter files by year (e.g., 2020)')
     parser.add_argument('--shard_size_mb', type=int, default=64, help='Target shard size in megabytes')
     parser.add_argument('--compression', type=str, default='zstd:3', help='Compression algorithm')
     
     args = parser.parse_args()
+    RichPrinter.print_config(args, "Convert Configuration")
+    
+    return args
+
+
+def main():
+    args = parse_args()
     
     # Handle 'none' compression
     compression = None if args.compression == 'none' else args.compression
-    
-    print("=" * 60)
-    print("ECG NPY to MDS Converter")
-    print("=" * 60)
-    print(f"Input directory: {args.input_dir}")
-    print(f"Output directory: {args.output_dir}")
-    print(f"Year filter: {args.year if args.year else 'None (all years)'}")
-    print(f"Shard size: {args.shard_size_mb} MB")
-    print(f"Compression: {compression if compression else 'None'}")
-    print("=" * 60)
-    print()
     
     convert_to_mds(
         input_dir=args.input_dir,
