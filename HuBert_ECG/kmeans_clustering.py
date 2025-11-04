@@ -184,8 +184,8 @@ def cluster(args) -> None:
     save_dir = Path(f"{args.output_dir}/sklearn-model")
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    group = f"clustering_iteration_{args.train_iteration}"
-    wandb.init(project="HuBert ECG", group=group, entity=None)
+    # group = f"clustering_iteration_{args.train_iteration}"
+    # wandb.init(project="HuBert ECG", group=group, entity=None)
 
     clearml_config = {
         'project': "HuBERT-ECG",  # ClearML project name
@@ -273,16 +273,17 @@ def cluster(args) -> None:
             desc="Val evaluation"
         )
         
-        # Log metrics to W&B
-        wandb.log({
-            "train_sse": train_metrics["sse"],
-            "train_db_score": train_metrics["db_score"],
-            "train_ch_score": train_metrics["ch_score"],
-            "val_sse": val_metrics["sse"],
-            "val_db_score": val_metrics["db_score"],
-            "val_ch_score": val_metrics["ch_score"]
-        }, step=n_clusters)
-        
+        # # Log metrics to W&B
+        # wandb.log({
+        #     "train_sse": train_metrics["sse"],
+        #     "train_db_score": train_metrics["db_score"],
+        #     "train_ch_score": train_metrics["ch_score"],
+        #     "val_sse": val_metrics["sse"],
+        #     "val_db_score": val_metrics["db_score"],
+        #     "val_ch_score": val_metrics["ch_score"]
+        # }, step=n_clusters)
+
+        # Log metrics to ClearML
         clearml_logger.log_metrics({
             "train_sse": train_metrics["sse"],
             "train_db_score": train_metrics["db_score"],
