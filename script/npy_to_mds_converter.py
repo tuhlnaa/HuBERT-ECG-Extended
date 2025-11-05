@@ -6,10 +6,10 @@ for efficient data loading and streaming. Supports filtering by year based
 on the filename date format.
 
 Uusage:
-python script.py --input_dir ./data --output_dir ./output
+python script/npy_to_mds_converter.py --input_dir ./data --output_dir ./output
 
 # Use only dtype without shape constraint
-python script.py --input_dir ./data --output_dir ./output --ecg_dtype "ndarray:float32"
+python script/npy_to_mds_converter.py --input_dir ./data --output_dir ./output --ecg_dtype "ndarray:float32"
 """
 
 import argparse

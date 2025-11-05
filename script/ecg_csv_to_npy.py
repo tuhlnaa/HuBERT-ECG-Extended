@@ -8,10 +8,10 @@ Supports two conversion formulas:
 
 Usage:
 # Using standard formula (baseline)
-python ./script/ecg_csv_to_npy.py --input-dir "/path/to/csv/data" --output-dir "/path/to/output" --gain 1000 --baseline 0 --n-processes 10
+python script/ecg_csv_to_npy.py --input-dir "/path/to/csv/data" --output-dir "/path/to/output" --gain 1000 --baseline 0 --n-processes 10
 
 # Using alternative formula (adc_zero)
-python ./script/ecg_csv_to_npy.py --input-dir "/path/to/csv/data" --output-dir "/path/to/output" --gain 1000 --adc-zero -0.5 --n-processes 10
+python script/ecg_csv_to_npy.py --input-dir "/path/to/csv/data" --output-dir "/path/to/output" --gain 1000 --adc-zero -0.5 --n-processes 10
 """
 
 import argparse
