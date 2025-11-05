@@ -8,7 +8,7 @@ for HuBERT-ECG training. Supports both morphological feature extraction
 
 Usage:
 # Extract morphological features (iteration 1)
-python ./script/extract_features.py 1 "/path/to/dataframe.csv" "/path/to/ecg/data" "/path/to/output" 0.0 1.0 --mfcc_only --samp_rate 500
+python ./script/extract_features.py 1 "/path/to/dataframe.csv" "/path/to/ecg/data" "/path/to/output" 0.0 1.0 --mfcc_only --sample_rate 500
 
 # Extract latent features (iteration 2+)
 python ./script/extract_features.py 2 "/path/to/dataframe.csv" "/path/to/ecg/data" "/path/to/output" 0.0 1.0 --hubert_path "/path/to/model.pt" --output_layer 2 --batch_size 32
@@ -380,8 +380,8 @@ class FeatureExtractionPipeline:
         """Initialize pipeline with command-line arguments."""
         self.args = args
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.input_dir = Path(args.in_dir)
-        self.output_dir = Path(args.dest_dir)
+        self.input_dir = Path(args.input_dir)
+        self.output_dir = Path(args.output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.skip_existing=not args.overwrite
     
@@ -392,7 +392,7 @@ class FeatureExtractionPipeline:
         Iteration 1: Extract morphological features
         Iteration 2+: Extract latent features from HuBERT model
         """
-        if self.args.train_iteration == 1:
+        if self.args.iteration == 1:
             self._extract_morphological_features()
         else:
             self._extract_latent_features()
@@ -415,7 +415,7 @@ class FeatureExtractionPipeline:
             input_dir=self.input_dir,
             output_dir=self.output_dir,
             feature_mode=feature_mode,
-            sample_rate=self.args.samp_rate,
+            sample_rate=self.args.sample_rate,
         )
     
 
@@ -423,13 +423,13 @@ class FeatureExtractionPipeline:
         """Extract latent features from HuBERT model."""
         # Configure extraction
         config = ExtractionConfig(
-            dataset_csv_path=self.args.dataframe_path,
+            dataset_csv_path=self.args.df_path,
             ecg_dir=self.input_dir,
             output_dir=self.output_dir,
             batch_size=self.args.batch_size,
-            data_slice=(self.args.start_perc, self.args.end_perc),
-            save_metadata_csv=self.args.save_csv_for_dumped_features,
-            iteration_id=self.args.train_iteration,
+            data_slice=(self.args.subset_start, self.args.subset_end),
+            save_metadata_csv=self.args.save_csv,
+            iteration_id=self.args.iteration,
         )
 
         logger.info(
@@ -466,9 +466,9 @@ class FeatureExtractionPipeline:
     def _load_and_slice_dataframe(self) -> pd.DataFrame:
         """Load dataframe and apply slicing."""
         logger.info("Loading dataframe...")
-        dataframe = pd.read_csv(self.args.dataframe_path)
-        start_idx = int(self.args.start_perc * len(dataframe))
-        end_idx = int(self.args.end_perc * len(dataframe)) + 1
+        dataframe = pd.read_csv(self.args.df_path)
+        start_idx = int(self.args.subset_start * len(dataframe))
+        end_idx = int(self.args.subset_end * len(dataframe)) + 1
         return dataframe.iloc[start_idx:end_idx]
 
 
