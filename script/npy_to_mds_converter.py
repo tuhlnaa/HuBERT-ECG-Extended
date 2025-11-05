@@ -8,10 +8,12 @@ on the filename date format.
 
 import argparse
 import json
+import logging
 import sys
 import numpy as np
 
 from pathlib import Path
+from rich.logging import RichHandler
 from streaming import MDSWriter
 from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, BarColumn, TextColumn
 from typing import Optional, Dict, Any
@@ -21,6 +23,14 @@ PROJECT_ROOT = Path(__file__).parents[1]
 sys.path.append(str(PROJECT_ROOT))
 
 from HuBert_ECG.config import RichPrinter
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(message)s", 
+    handlers=[RichHandler()]
+)
+logger = logging.getLogger(__name__)
 
 
 def parse_filename(filename: str) -> Dict[str, Any]:
@@ -40,7 +50,7 @@ def parse_filename(filename: str) -> Dict[str, Any]:
             'year': year,
         }
     except (IndexError, ValueError) as e:
-        print(f"Warning: Could not parse filename {filename}: {e}")
+        logger.warning(f"Could not parse filename {filename}: {e}")
         return {
             'filename': filename,
             'date': None,
@@ -48,12 +58,31 @@ def parse_filename(filename: str) -> Dict[str, Any]:
         }
 
 
+def format_index_json(output_dir: Path):
+    """Reformat the index.json file for better readability."""
+    index_file = output_dir / "index.json"
+    
+    if not index_file.exists():
+        logger.warning(f"Warning: index.json not found at {index_file}")
+        return
+    
+    with open(index_file, 'r') as f:
+        data = json.load(f)
+    
+    # Write it back with proper formatting
+    with open(index_file, 'w') as f:
+        json.dump(data, f, indent=2)
+    
+    logger.info(f"Formatted index.json for better readability")
+
+
 def convert_to_mds(
     input_dir: str,
     output_dir: str,
     year_filter: Optional[int] = None,
     shard_size_mb: int = 64,
-    compression: str = 'zstd'
+    compression: str = None, 
+    ecg_dtype: str = 'ndarray:float32'
 ):
     """
     Convert ECG .npy files to MDS format.
@@ -64,6 +93,7 @@ def convert_to_mds(
         year_filter: Optional year to filter files (e.g., 2020)
         shard_size_mb: Target size of each shard in MB
         compression: Compression algorithm ('zstd', 'snappy', 'brotli', or None)
+        ecg_dtype: ECG data type specification (e.g., 'ndarray:float32:12,5000')
     """
     input_path = Path(input_dir)
     output_path = Path(output_dir)
@@ -75,7 +105,7 @@ def convert_to_mds(
     
     # Find all .npy files
     npy_files = list(input_path.glob("*.npy"))
-    print(f"Found {len(npy_files)} .npy files")
+    logger.info(f"Found {len(npy_files)} .npy files")
     
     # Filter by year if specified
     if year_filter is not None:
@@ -85,10 +115,10 @@ def convert_to_mds(
             if metadata.get('year') == year_filter:
                 filtered_files.append(npy_file)
         npy_files = filtered_files
-        print(f"Filtered to {len(npy_files)} files from year {year_filter}")
+        logger.info(f"Filtered to {len(npy_files)} files from year {year_filter}")
     
     if len(npy_files) == 0:
-        print("No files to process!")
+        logger.warning("No files to process!")
         return
     
     # Define schema for MDS
@@ -97,7 +127,7 @@ def convert_to_mds(
         'date': 'str',
         'year': 'int32',
         'channel_labels': 'json',
-        'ecg_data': 'ndarray:float32'
+        'ecg_data': ecg_dtype
     }
 
     # Create MDS writer with rich progress bar
@@ -124,7 +154,7 @@ def convert_to_mds(
                 try:
                     ecg_data = np.load(npy_file)
                 except Exception as e:
-                    print(f"Error loading {npy_file}: {e}")
+                    logger.warning(f"Error loading {npy_file}: {e}")
                     ecg_data = None
 
                 if ecg_data is not None:
@@ -145,8 +175,11 @@ def convert_to_mds(
                 
                 progress.update(task_id, advance=1)
     
-    print(f"\nConversion complete!")
-    print(f"Output saved to: {output_path}")
+    # Format the index.json file for better readability
+    format_index_json(output_path)
+
+    logger.info(f"\nConversion complete!")
+    logger.info(f"Output saved to: {output_path}")
     
     # Save metadata
     metadata_file = output_path / "conversion_metadata.json"
@@ -154,8 +187,7 @@ def convert_to_mds(
         'total_samples': len(npy_files),
         'year_filter': year_filter,
         'channel_labels': channel_labels,
-        'ecg_shape': [12, 5000],
-        'dtype': 'float32',
+        'ecg_dtype': ecg_dtype,
         'compression': compression,
         'shard_size_mb': shard_size_mb
     }
@@ -163,7 +195,7 @@ def convert_to_mds(
     with open(metadata_file, 'w') as f:
         json.dump(metadata_info, f, indent=2)
     
-    print(f"Metadata saved to: {metadata_file}")
+    logger.info(f"Metadata saved to: {metadata_file}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -179,8 +211,14 @@ def parse_args() -> argparse.Namespace:
     # Optional arguments
     parser.add_argument('--year', type=int, default=None, help='Filter files by year (e.g., 2020)')
     parser.add_argument('--shard_size_mb', type=int, default=64, help='Target shard size in megabytes')
-    parser.add_argument('--compression', type=str, default='zstd:3', help='Compression algorithm')
-    
+    parser.add_argument('--compression', type=str, default=None, help='Compression algorithm')
+    parser.add_argument(
+        '--ecg_dtype', 
+        type=str, 
+        default='ndarray:float32:12,5000',
+        help='ECG data type specification (e.g., "ndarray:float32:12,5000", "ndarray:float32", "ndarray")'
+    )
+
     args = parser.parse_args()
     RichPrinter.print_config(args, "Convert Configuration")
     
@@ -198,7 +236,8 @@ def main():
         output_dir=args.output_dir,
         year_filter=args.year,
         shard_size_mb=args.shard_size_mb,
-        compression=compression
+        compression=compression,
+        ecg_dtype=args.ecg_dtype
     )
 
 
@@ -206,16 +245,7 @@ if __name__ == "__main__":
     main()
 
 """
-============================================================
-ECG NPY to MDS Converter
-============================================================
-Input directory: D:\Kai\Dataset_Preprocessing\CGMH-ECG_npz
-Output directory: .\output\CGMH-ECG_mds
-Year filter: None (all years)
-Shard size: 64 MB
-Compression: zstd:3
-============================================================
-
 Found 45239 .npy files
-Converting to MDS: 100%|█████████████████████████████████████████████████████████████| 45239/45239 [16:00<00:00, 47.10it/s]
+  Converting to MDS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% (45239/45239) 0:01:47
+Formatted index.json for better readability
 """
