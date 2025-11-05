@@ -2,13 +2,40 @@
 Script to integrate label data from multiple CSV files in a deep learning dataset.
 Removes duplicate entries based on filename and consolidates all data into a single CSV.
 
-Uusage:
+Usage:
 python utility/integrate_csv_data.py /path/to/dataset --output integrated_dataset.csv
 """
 
 import argparse
 import pandas as pd
 from pathlib import Path
+
+
+def save_summary_to_file(df, output_path, output_file):
+    """Save dataset summary statistics to a text file."""
+    # Prepare summary statistics to save to file
+    summary_lines = []
+    summary_lines.append("=== Dataset Summary ===")
+    summary_lines.append(f"Total unique samples: {len(df)}")
+    summary_lines.append(f"Columns: {list(df.columns)}")
+    
+    # Count non-zero tags for each label column (excluding filename, age, sex)
+    tag_columns = [col for col in df.columns if col not in ['filename', 'age', 'sex']]
+    if tag_columns:
+        summary_lines.append("")
+        summary_lines.append("=== Tag Distribution ===")
+        for col in tag_columns:
+            if df[col].dtype in ['int64', 'float64']:
+                count = (df[col] == 1).sum()
+                percentage = (count / len(df)) * 100
+                summary_lines.append(f"{col}: {count} ({percentage:.2f}%)")
+    
+    # Save summary to file
+    summary_file = output_path / output_file.replace('.csv', '_summary.txt')
+    with open(summary_file, 'w') as f:
+        f.write('\n'.join(summary_lines))
+    
+    print(f"Summary statistics saved to: {summary_file}")
 
 
 def integrate_csv_files(dataset_path, output_file='integrated_dataset.csv', pattern='**/*.csv'):
@@ -51,9 +78,6 @@ def integrate_csv_files(dataset_path, output_file='integrated_dataset.csv', patt
     # Keep the first occurrence
     filename_column = combined_df.columns[0]
     deduplicated_df = combined_df.drop_duplicates(subset=[filename_column], keep='first')
-    
-    duplicates_removed = len(combined_df) - len(deduplicated_df)
-    print(f"Duplicates removed: {duplicates_removed}")
     print(f"Total rows after deduplication: {len(deduplicated_df)}")
     
     # Sort by filename for consistency
@@ -64,20 +88,8 @@ def integrate_csv_files(dataset_path, output_file='integrated_dataset.csv', patt
     deduplicated_df.to_csv(output_path, index=False)
     print(f"\nIntegrated dataset saved to: {output_path}")
     
-    # Display summary statistics
-    print("\n=== Dataset Summary ===")
-    print(f"Total unique samples: {len(deduplicated_df)}")
-    print(f"Columns: {list(deduplicated_df.columns)}")
-    
-    # Count non-zero tags for each label column (excluding filename, age, sex)
-    tag_columns = [col for col in deduplicated_df.columns if col not in ['filename', 'age', 'sex']]
-    if tag_columns:
-        print("\n=== Tag Distribution ===")
-        for col in tag_columns:
-            if deduplicated_df[col].dtype in ['int64', 'float64']:
-                count = (deduplicated_df[col] == 1).sum()
-                percentage = (count / len(deduplicated_df)) * 100
-                print(f"{col}: {count} ({percentage:.2f}%)")
+    # Save summary statistics to a separate text file
+    save_summary_to_file(deduplicated_df, dataset_path, output_file)
     
     return deduplicated_df
 
