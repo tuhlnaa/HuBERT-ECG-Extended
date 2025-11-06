@@ -12,10 +12,13 @@ python script/extract_features.py 1 "/path/to/dataframe.csv" "/path/to/ecg/data"
 
 # Extract latent features (iteration 2+)
 python script/extract_features.py 2 "/path/to/dataframe.csv" "/path/to/ecg/data" "/path/to/output" 0.0 1.0 --hubert_path "/path/to/model.pt" --output_layer 2 --batch_size 32
+0.315 -> 0.307
+0.044 -> 0.030
 """
 
 import logging
 import sys
+import time
 import torch
 
 import numpy as np
@@ -65,9 +68,28 @@ class ExtractionConfig:
 class ECGFeatureExtractor:
     """Main class for extracting features from ECG records."""
     
-    def __init__(self, device: torch.device = torch.device('cpu'), skip_existing: bool = True):
+    def __init__(
+        self, 
+        feature_mode: str,
+        sample_rate: int, 
+        base_sample_rate: int = 500, 
+        device: torch.device = torch.device('cpu'), 
+        skip_existing: bool = True
+    ):
         self.device = device
         self.skip_existing = skip_existing
+
+        # Validate sampling rate
+        if sample_rate not in Config.SAMPLING:
+            error_msg = (f"Unsupported sample_rate: {sample_rate}. Must be one of {list(Config.SAMPLING.keys())}")
+            raise ValueError(error_msg)
+        
+        self.config = Config.SAMPLING[sample_rate]
+
+        self.processor = ECGDataProcessor(self.config, sample_rate, base_sample_rate)
+        self.feature_extractor = FeatureExtractorFactory.create(
+            feature_mode, sample_rate, self.device
+        )
 
     def validate_features(self, features: List, expected_n_shards: int, 
                          feature_mode: str) -> None:
@@ -99,44 +121,33 @@ class ECGFeatureExtractor:
         # Skip if file exists and skip_existing is True
         if self.skip_existing and output_path.exists():
             return None
-
-        # Validate sampling rate
-        if sample_rate not in Config.SAMPLING:
-            error_msg = (
-                f"Unsupported sample_rate: {sample_rate}. "
-                f"Must be one of {list(Config.SAMPLING.keys())}"
-            )
-            logger.error(error_msg)
-            raise ValueError(error_msg)
-        
-        config = Config.SAMPLING[sample_rate]
         
         # Load and preprocess data
-        processor = ECGDataProcessor(config, sample_rate, base_sample_rate)
-        data = processor.load_and_preprocess(input_path, max_samples, filename)
-        
+        start = time.monotonic()
+        data = self.processor.load_and_preprocess(input_path, max_samples, filename)
+
         if data is None:
             logger.warning(f"Failed to load and preprocess data for {filename}")
             return None
         
         # Process data into shards
-        shards = processor.process_to_shards(data)
-        
+        shards = self.processor.process_to_shards(data)
+        end = time.monotonic()
+
         # Extract features from each shard
-        feature_extractor = FeatureExtractorFactory.create(
-            feature_mode, sample_rate, self.device
-        )
-        features = [feature_extractor.extract(shard) for shard in shards]
-        
+        start2 = time.monotonic()
+        features = [self.feature_extractor.extract(shard) for shard in shards]
+        end2 = time.monotonic()
+
         # Validate output
-        expected_n_shards = (data.shape[0] * data.shape[1]) // config.compression_factor
+        expected_n_shards = (data.shape[0] * data.shape[1]) // self.config.compression_factor
         self.validate_features(features, expected_n_shards, feature_mode)
         
         # Save features
         features_array = np.array(features, dtype=np.float32)
         np.save(output_path, features_array)
         
-        return features_array
+        return features_array, end-start, end2-start2
         
 
     def extract_batch(self, dataframe: pd.DataFrame, input_dir: Path, 
@@ -174,17 +185,20 @@ class ECGFeatureExtractor:
         ) as progress:
             
             task_id = progress.add_task("[green]Extracting features", total=total_records)
-            
+            alist, blist = [], []
+
             for record in dataframe.itertuples(index=False):
                 try:
-                    result = self.extract_features(
+                    result, a, b = self.extract_features(
                         record=record,
                         input_dir=input_dir,
                         output_dir=output_dir,
                         feature_mode=feature_mode,
                         sample_rate=sample_rate,
                     )
-                    
+                    alist.append(a)
+                    blist.append(b)
+
                     if result is None:
                         skipped_count += 1
                     else:
@@ -197,7 +211,9 @@ class ECGFeatureExtractor:
                     logger.error(error_msg)
                 
                 progress.update(task_id, advance=1)
-        
+            print(sum(blist) / len(blist))
+            print(sum(alist) / len(alist))
+
         self._log_failed_records(failed_records, failed_count)
         
         stats = {
@@ -416,7 +432,13 @@ class FeatureExtractionPipeline:
         dataframe = self._load_and_slice_dataframe()
         
         # Extract features
-        extractor = ECGFeatureExtractor(self.device, self.skip_existing)
+        # extractor = ECGFeatureExtractor(self.device, self.skip_existing)
+        extractor = ECGFeatureExtractor(
+            feature_mode=self.args.feature_mode,
+            sample_rate=self.args.sample_rate,
+            device=self.device, 
+            skip_existing=self.skip_existing
+        )
         extractor.extract_batch(
             dataframe=dataframe,
             input_dir=self.input_dir,
