@@ -106,14 +106,8 @@ class ECGFeatureExtractor:
     
 
     def extract_features(self, record, input_dir: Path, output_dir: Path,
-                        feature_mode: str, sample_rate: int, max_samples: int = 2500,
-                        base_sample_rate: int = 500) -> Optional[np.ndarray]:
-        """
-        Extract and save ECG signal features.
-        
-        Returns:
-            Extracted features array or None if skipped
-        """
+                        feature_mode: str, max_samples: int = 2500) -> Optional[np.ndarray]:
+        """Extract and save ECG signal features."""
         filename = record.filename
         input_path = input_dir / filename
         output_path = output_dir / filename
@@ -123,7 +117,6 @@ class ECGFeatureExtractor:
             return None
         
         # Load and preprocess data
-        start = time.monotonic()
         data = self.processor.load_and_preprocess(input_path, max_samples, filename)
 
         if data is None:
@@ -132,12 +125,9 @@ class ECGFeatureExtractor:
         
         # Process data into shards
         shards = self.processor.process_to_shards(data)
-        end = time.monotonic()
 
         # Extract features from each shard
-        start2 = time.monotonic()
         features = [self.feature_extractor.extract(shard) for shard in shards]
-        end2 = time.monotonic()
 
         # Validate output
         expected_n_shards = (data.shape[0] * data.shape[1]) // self.config.compression_factor
@@ -147,7 +137,7 @@ class ECGFeatureExtractor:
         features_array = np.array(features, dtype=np.float32)
         np.save(output_path, features_array)
         
-        return features_array, end-start, end2-start2
+        return features_array
         
 
     def extract_batch(self, dataframe: pd.DataFrame, input_dir: Path, 
@@ -185,19 +175,16 @@ class ECGFeatureExtractor:
         ) as progress:
             
             task_id = progress.add_task("[green]Extracting features", total=total_records)
-            alist, blist = [], []
 
             for record in dataframe.itertuples(index=False):
                 try:
-                    result, a, b = self.extract_features(
+                    result = self.extract_features(
                         record=record,
                         input_dir=input_dir,
                         output_dir=output_dir,
                         feature_mode=feature_mode,
                         sample_rate=sample_rate,
                     )
-                    alist.append(a)
-                    blist.append(b)
 
                     if result is None:
                         skipped_count += 1
@@ -211,8 +198,6 @@ class ECGFeatureExtractor:
                     logger.error(error_msg)
                 
                 progress.update(task_id, advance=1)
-            print(sum(blist) / len(blist))
-            print(sum(alist) / len(alist))
 
         self._log_failed_records(failed_records, failed_count)
         
