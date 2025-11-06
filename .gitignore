@@ -3,6 +3,11 @@ output/
 wandb/
 dataset/
 models/checkpoints/
+01.py
+02.py
+03.py
+04.py
+05.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -1,0 +1,19 @@
+=== Dataset Summary ===
+Total unique samples: 513
+Columns: ['filename', 'age', 'sex', 'CD', 'CIAHB', 'CHD', 'HF', 'HVD', 'MI', 'RAF', 'VF', 'VH', 'VTach', 'WPW', 'AF', 'BBB', 'NSR']
+
+=== Tag Distribution ===
+CD: 15 (2.92%)
+CIAHB: 2 (0.39%)
+CHD: 21 (4.09%)
+HF: 7 (1.36%)
+HVD: 5 (0.97%)
+MI: 367 (71.54%)
+RAF: 2 (0.39%)
+VF: 25 (4.87%)
+VH: 13 (2.53%)
+VTach: 10 (1.95%)
+WPW: 2 (0.39%)
+AF: 15 (2.92%)
+BBB: 20 (3.90%)
+NSR: 80 (15.59%)

@@ -1,0 +1,14 @@
+=== Dataset Summary ===
+Total unique samples: 6877
+Columns: ['filename', 'age', 'sex', 'STD', 'STE', 'VEB', 'AF', 'IAVB', 'LBBB', 'NSR', 'PAC', 'RBBB']
+
+=== Tag Distribution ===
+STD: 869 (12.64%)
+STE: 220 (3.20%)
+VEB: 700 (10.18%)
+AF: 1221 (17.75%)
+IAVB: 722 (10.50%)
+LBBB: 236 (3.43%)
+NSR: 918 (13.35%)
+PAC: 616 (8.96%)
+RBBB: 1857 (27.00%)

@@ -1,0 +1,32 @@
+=== Dataset Summary ===
+Total unique samples: 20036
+Columns: ['filename', 'age', 'sex', 'ERe', 'FB', 'LVH', 'NSSTTA', 'RAb', 'RAH', 'SPRI', 'STIAb', 'VTach', 'AF', 'IAVB', 'LAD', 'LQRSV', 'NSR', 'PAC', 'PR', 'PVC', 'QAb', 'RAD', 'SA', 'SB', 'STach', 'TAb', '+ROT', '-ROT', 'CRBBB|RBBB', 'CLBBB|LBBB']
+
+=== Tag Distribution ===
+ERe: 22 (0.11%)
+FB: 7 (0.03%)
+LVH: 414 (2.07%)
+NSSTTA: 299 (1.49%)
+RAb: 16 (0.08%)
+RAH: 32 (0.16%)
+SPRI: 23 (0.11%)
+STIAb: 286 (1.43%)
+VTach: 29 (0.14%)
+AF: 120 (0.60%)
+IAVB: 142 (0.71%)
+LAD: 1124 (5.61%)
+LQRSV: 3 (0.01%)
+NSR: 9501 (47.42%)
+PAC: 314 (1.57%)
+PR: 16 (0.08%)
+PVC: 543 (2.71%)
+QAb: 52 (0.26%)
+RAD: 1124 (5.61%)
+SA: 901 (4.50%)
+SB: 5264 (26.27%)
+STach: 4895 (24.43%)
+TAb: 3479 (17.36%)
++ROT: 35 (0.17%)
+-ROT: 60 (0.30%)
+CRBBB|RBBB: 551 (2.75%)
+CLBBB|LBBB: 60 (0.30%)
