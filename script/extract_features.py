@@ -402,9 +402,6 @@ class FeatureExtractionPipeline:
         """Extract morphological features using ECGFeatureExtractor."""
         logger.info("Extracting morphological features...")
         
-        # Determine feature mode
-        feature_mode = self._get_feature_mode()
-        
         # Load and slice dataframe
         dataframe = self._load_and_slice_dataframe()
         
@@ -414,7 +411,7 @@ class FeatureExtractionPipeline:
             dataframe=dataframe,
             input_dir=self.input_dir,
             output_dir=self.output_dir,
-            feature_mode=feature_mode,
+            feature_mode=self.args.feature_mode,
             sample_rate=self.args.sample_rate,
         )
     
@@ -451,16 +448,6 @@ class FeatureExtractionPipeline:
         # Extract features
         extractor = LatentFeatureExtractor(model, self.args.output_layer, config)
         extractor.extract_and_save()
-    
-
-    def _get_feature_mode(self) -> str:
-        """Determine feature mode from arguments."""
-        if self.args.mfcc_only:
-            return 'mfcc_only'
-        elif self.args.time_freq:
-            return 'time_freq'
-        else:
-            return 'mixed'
     
 
     def _load_and_slice_dataframe(self) -> pd.DataFrame:

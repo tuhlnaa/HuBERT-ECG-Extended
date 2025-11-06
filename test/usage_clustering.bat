@@ -10,11 +10,11 @@ set "PATH_TO_DATASET_CSV_TRAIN=./data/label/ptb/ptb_train_0.csv"
 set "PATH_TO_DATASET_CSV_VAL=./data/label/ptb/ptb_test_0.csv"
 set "IN_DIR=./output/PTB_mfcc_only"
 set "TRAIN_ITERATION=1"
-set "BATCH_SIZE=32"
+set "BATCH_SIZE=100"
 
 rem Clustering parameters
 set "N_CLUSTERS_START=10"
-set "N_CLUSTERS_END=100"
+set "N_CLUSTERS_END=150"
 set "STEP=10"
 
 rem Optional parameters

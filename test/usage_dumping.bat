@@ -15,6 +15,7 @@ set "OUTPUT_DIR=./output/PTB_testV1_outputV2"
 set "SUBSET_START=0.0"
 set "SUBSET_END=1.0"
 set "ITERATION=1"
+set "FEATURE_MODE=mfcc_only"
 
 rem Optional parameters
 set "HUBERT_PATH=./output/model_weights/hubert_ecg_small.pt"
@@ -32,7 +33,7 @@ echo [EXECUTING] Dumping morphological features (iteration 1)...
 python script/extract_features.py %ITERATION% %DF_PATH% %INPUT_DIR% %OUTPUT_DIR% ^
     %SUBSET_START% %SUBSET_END% ^
     --sample_rate=%SAMPLE_RATE% ^
-    --mfcc_only ^
+    --feature_mode=%FEATURE_MODE% ^
     --overwrite ^
     --save_csv
 
