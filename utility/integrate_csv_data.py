@@ -8,10 +8,12 @@ python utility/integrate_csv_data.py /path/to/dataset --output integrated_datase
 
 import argparse
 import pandas as pd
+
 from pathlib import Path
+from typing import Optional
 
 
-def save_summary_to_file(df, output_path, output_file):
+def save_summary_to_file(df, output_path: Path, output_file: str) -> None:
     """Save dataset summary statistics to a text file."""
     # Prepare summary statistics to save to file
     summary_lines = []
@@ -38,17 +40,21 @@ def save_summary_to_file(df, output_path, output_file):
     print(f"Summary statistics saved to: {summary_file}")
 
 
-def integrate_csv_files(dataset_path, output_file='integrated_dataset.csv', pattern='**/*.csv'):
+def integrate_csv_files(
+    dataset_path: Path | str,
+    output_file: str = 'integrated_dataset.csv',
+    pattern: str = '**/*.csv'
+) -> Optional[pd.DataFrame]:
     """
     Integrate multiple CSV files into a single CSV, removing duplicates.
     
     Args:
-        dataset_path (str or Path): Path to the dataset directory
-        output_file (str): Name of the output CSV file
-        pattern (str): Glob pattern to match CSV files (default: '**/*.csv' for recursive search)
+        dataset_path: Path to the dataset directory
+        output_file: Name of the output CSV file
+        pattern: Glob pattern to match CSV files (default: '**/*.csv' for recursive search)
     
     Returns:
-        pd.DataFrame: The integrated dataframe
+        The integrated dataframe, or None if no CSV files found
     """
     dataset_path = Path(dataset_path)
     
@@ -94,12 +100,13 @@ def integrate_csv_files(dataset_path, output_file='integrated_dataset.csv', patt
     return deduplicated_df
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Integrate CSV tag data from multiple files, removing duplicates.')
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description='Integrate CSV tag data from multiple files, removing duplicates.'
+    )
     parser.add_argument('dataset_path', type=str, help='Path to the dataset directory (e.g., dataset/ptb/)')
     parser.add_argument('--output', type=str, default='integrated_dataset.csv', help='Output CSV filename (default: integrated_dataset.csv)')
     parser.add_argument('--pattern', type=str, default='*.csv', help='Pattern to match CSV files (default: *.csv). Use **/*.csv for recursive search.')
-    
     args = parser.parse_args()
     
     # Convert to Path object and check if it exists
@@ -110,6 +117,7 @@ def main():
     
     # Run integration
     integrate_csv_files(dataset_path, args.output, args.pattern)
+
 
 if __name__ == '__main__':
     main()

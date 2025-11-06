@@ -12,8 +12,6 @@ python script/extract_features.py 1 "/path/to/dataframe.csv" "/path/to/ecg/data"
 
 # Extract latent features (iteration 2+)
 python script/extract_features.py 2 "/path/to/dataframe.csv" "/path/to/ecg/data" "/path/to/output" 0.0 1.0 --hubert_path "/path/to/model.pt" --output_layer 2 --batch_size 32
-0.315 -> 0.307
-0.044 -> 0.030
 """
 
 import logging
@@ -182,8 +180,7 @@ class ECGFeatureExtractor:
                         record=record,
                         input_dir=input_dir,
                         output_dir=output_dir,
-                        feature_mode=feature_mode,
-                        sample_rate=sample_rate,
+                        feature_mode=feature_mode
                     )
 
                     if result is None:
@@ -417,7 +414,6 @@ class FeatureExtractionPipeline:
         dataframe = self._load_and_slice_dataframe()
         
         # Extract features
-        # extractor = ECGFeatureExtractor(self.device, self.skip_existing)
         extractor = ECGFeatureExtractor(
             feature_mode=self.args.feature_mode,
             sample_rate=self.args.sample_rate,
