@@ -22,7 +22,7 @@ from logging_utils import ClearMLLogger
 from metricsV2 import FinetuneMetrics
 from config import create_finetuning_parser, init_seeds
 from dataset import create_dataloader
-from hubert_ecg import HubertECG as HuBERT, HubertECGConfig
+from hubert_ecg import HubertECG as HuBERT, HuBERTECGConfig
 from hubert_ecg_classification import HuBERTForECGClassification as HuBERTClassification
 
 # Configure logging
@@ -197,7 +197,7 @@ def finetune(args):
         config = checkpoint['model_config']
 
         if type(config) == HubertConfig:
-            config = HubertECGConfig(**config.to_dict())
+            config = HuBERTECGConfig(**config.to_dict())
         config.conv_pos_batch_norm = False
         
         pretrained_hubert = HuBERT(config)
@@ -292,7 +292,7 @@ def finetune(args):
         else:
             raise ValueError(f"Downsampling factor {args.downsampling_factor} not supported")
                 
-        config = HubertECGConfig(
+        config = HuBERTECGConfig(
             hidden_size = hidden_size,
             num_hidden_layers = num_hidden_layers,
             num_attention_heads = num_attention_heads,
@@ -348,7 +348,7 @@ def finetune(args):
         checkpoint = torch.load(args.load_path, map_location = 'cpu', weights_only=False)
         config = checkpoint['model_config']
         if type(config) == HubertConfig:
-            config = HubertECGConfig(**config.to_dict())
+            config = HuBERTECGConfig(**config.to_dict())
         config.layerdrop = args.finetuning_layerdrop
         config.conv_pos_batch_norm = False
 

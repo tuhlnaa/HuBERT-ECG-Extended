@@ -36,7 +36,7 @@ sys.path.append(str(PROJECT_ROOT))
 from HuBert_ECG.config import create_dumping_parser, init_seeds
 from HuBert_ECG.dataset import ECGDataset
 from HuBert_ECG.ecg_features import Config, ECGDataProcessor, FeatureExtractorFactory
-from HuBert_ECG.hubert_ecg import HubertECG, HubertECGConfig
+from HuBert_ECG.hubert_ecg import HubertECG, HuBERTECGConfig
 
 
 # Configure logging
@@ -300,20 +300,31 @@ class LatentFeatureExtractor:
 
     def _process_batches(self, dataloader: DataLoader) -> None:
         """Process all batches and extract features."""
-        for batch_idx, (ecgs, ecg_filenames) in enumerate(tqdm(dataloader, desc="Extracting features")):
-            ecgs = ecgs.to(self.device, non_blocking=True)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("({task.completed}/{task.total})"),
+            TimeElapsedColumn(),
+        ) as progress:
             
-            # Extract features
-            features = self._extract_features_from_batch(ecgs)
+            task_id = progress.add_task("[green]Extracting features", total=len(dataloader))
             
-            # Validate dimensions
-            self._validate_features(features, ecg_filenames)
-            
-            # Save features
-            self._save_batch_features(features, ecg_filenames)
-            
-            logger.info(f"Saved batch {batch_idx}: {features.shape}")
-    
+            for batch_idx, (ecgs, ecg_filenames) in enumerate(dataloader):
+                ecgs = ecgs.to(self.device, non_blocking=True)
+                
+                # Extract features
+                features = self._extract_features_from_batch(ecgs)
+                
+                # Validate dimensions
+                self._validate_features(features, ecg_filenames)
+                
+                # Save features
+                self._save_batch_features(features, ecg_filenames)
+                
+                progress.update(task_id, advance=1)
+        
 
     def _extract_features_from_batch(self, ecgs: torch.Tensor) -> np.ndarray:
         """Extract features from a batch of ECGs."""
@@ -370,7 +381,6 @@ class LatentFeatureExtractor:
         csv_path = self.config.output_dir / f"latent_{perc_size}perc_layer{self.layer_idx + 1}{iteration_suffix}.csv"
         dataframe.to_csv(csv_path, index=False)
         logger.info(f"Saved metadata CSV: {csv_path}")
-
 
 
 class FeatureExtractionPipeline:

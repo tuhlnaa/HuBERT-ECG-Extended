@@ -11,7 +11,7 @@ from matplotlib import pyplot as plt
 PROJECT_ROOT = Path(__file__).parents[1]
 sys.path.append(str(PROJECT_ROOT))
 
-from HuBert_ECG.hubert_ecg import HubertECGConfig, HubertECG as HuBERT
+from HuBert_ECG.hubert_ecg import HuBERTECGConfig, HubertECG as HuBERT
 from HuBert_ECG.hubert_ecg_classification import HuBERTForECGClassification as HuBERTClassification
 from HuBert_ECG.dataset import ECGDataset
 
@@ -41,7 +41,7 @@ def main():
     with open("./configs/model_inference_config.json", 'r') as f:
         config_dict = json.load(f)
 
-    config = HubertECGConfig(**config_dict)
+    config = HuBERTECGConfig(**config_dict)
     config.conv_pos_batch_norm = False
     use_label_embedding = False
     

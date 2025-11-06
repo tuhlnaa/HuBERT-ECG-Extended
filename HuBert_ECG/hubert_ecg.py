@@ -9,7 +9,7 @@ from transformers.modeling_outputs import BaseModelOutput
 #### returns the mask_time_indices. 
 #### To do so, we have to overwrite the forward method of the HuBERT class adding the mask_time_indices to the return statement.
 
-class HubertECGConfig(HubertConfig):
+class HuBERTECGConfig(HubertConfig):
     
     model_type = "hubert_ecg"
     
@@ -21,9 +21,9 @@ class HubertECGConfig(HubertConfig):
 
 class HubertECG(HubertModel):
     
-    config_class = HubertECGConfig
+    config_class = HuBERTECGConfig
     
-    def __init__(self, config: HubertECGConfig):
+    def __init__(self, config: HuBERTECGConfig):
         super().__init__(config)
         self.config = config
         self.pretraining_vocab_sizes = config.vocab_sizes

@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 # from transformers.models.hubert.modeling_hubert import compute_mask_indices
 
 # Import custom modules
-from hubert_ecg import HubertECG, HubertECGConfig
+from hubert_ecg import HubertECG, HuBERTECGConfig
 
 # Configure logging
 logging.basicConfig(
@@ -34,7 +34,7 @@ def _create_config_from_checkpoint(checkpoint, vocab_sizes):
     config = checkpoint['model_config']
     
     if isinstance(config, HubertConfig):
-        config = HubertECGConfig(
+        config = HuBERTECGConfig(
             ensemble=len(checkpoint['pretraining_vocab_sizes']),
             vocab_sizes=checkpoint['pretraining_vocab_sizes'],
             **config.to_dict()
@@ -180,7 +180,7 @@ def initialize_model_from_scratch(args, mask_time_prob, device):
     key = "null" if args.downsampling_factor is None else str(args.downsampling_factor)
     conv_configs = configs[key]
     
-    config = HubertECGConfig(
+    config = HuBERTECGConfig(
         ensemble_length=len(args.vocab_sizes),
         vocab_sizes=args.vocab_sizes,
         hidden_size=model_config["hidden_size"],

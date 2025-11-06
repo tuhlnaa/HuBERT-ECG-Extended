@@ -29,7 +29,7 @@ sys.path.append(str(PROJECT_ROOT))
 
 from metrics import CinC2020
 from hubert_ecg import HubertECG as HuBERT
-from hubert_ecg import HubertECGConfig
+from hubert_ecg import HuBERTECGConfig
 from hubert_ecg_classification import HuBERTForECGClassification as HuBERTClassification
 
 
@@ -209,7 +209,7 @@ if __name__ == "__main__":
 
     # this if is to ensure compatibility with models trained with the old version of the code where we had HubertConfig and not custom config as HuBERTECGConfig
     if type(config) == HubertConfig:
-        config = HubertECGConfig(ensemble_length=1, vocab_sizes=[100], **config.to_dict())
+        config = HuBERTECGConfig(ensemble_length=1, vocab_sizes=[100], **config.to_dict())
     config.conv_pos_batch_norm = False  # 🛠️
     
     pretrained_hubert = HuBERT(config)

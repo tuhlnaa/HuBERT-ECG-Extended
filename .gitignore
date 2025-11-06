@@ -8,6 +8,9 @@ models/checkpoints/
 03.py
 04.py
 05.py
+copy_csv_files.py
+sort_imports.py
+reduce_lines.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

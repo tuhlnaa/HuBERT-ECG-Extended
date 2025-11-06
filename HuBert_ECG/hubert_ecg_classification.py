@@ -10,7 +10,7 @@ from typing import Optional, Tuple, Union
 PROJECT_ROOT = Path(__file__).parents[0]
 sys.path.append(str(PROJECT_ROOT))
 
-from hubert_ecg import HubertECG, HubertECGConfig
+from hubert_ecg import HubertECG, HuBERTECGConfig
 
 class ActivationFunction(nn.Module):
     def __init__(self, activation : str):

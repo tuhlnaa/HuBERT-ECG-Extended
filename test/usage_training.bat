@@ -67,10 +67,10 @@ python HuBert_ECG/pretrain.py %TRAIN_ITERATION% %ECG_DIR_PATH% %TRAIN_CSV% %VAL_
     --model_dropout_mult=%MODEL_DROPOUT_MULT% ^
     %DYNAMIC_REG% ^
     --intervals_for_penalty=%INTERVALS_FOR_PENALTY% ^
-    --resume_pretraining ^
-    --load_path=%LOAD_PATH% ^
     --wandb_run_name=%WANDB_RUN_NAME%
 
+    @REM --resume_pretraining ^
+    @REM --load_path=%LOAD_PATH% ^
 
 @REM rem Train iteration 2 (resume pretraining with latent features)
 @REM echo.
