@@ -9,12 +9,20 @@ rem Configuration
 set "DF_PATH=./output/ptb_testV1.csv"
 set "INPUT_DIR=./output/PTB_testV1"
 set "OUTPUT_DIR=./output/PTB_testV1_outputV2"
+
 @REM set "DF_PATH=data/label/ptbxl/ptbxl_all.csv"
-@REM set "INPUT_DIR=D:/Kai/Dataset_Preprocessing/PTB-XL/PTB-XL"
-@REM set "OUTPUT_DIR=output/PTB_XL_mfcc_only"
+@REM set "INPUT_DIR=D:/Kai/Dataset_Preprocessing/PTB-XL/PTB-XL_npy"
+@REM set "OUTPUT_DIR=D:/Kai/Dataset_Preprocessing/PTB-XL/PTB-XL_mfcc_only"
+
+@REM set "DF_PATH=data/label/ptb/ptb_all.csv"
+@REM set "INPUT_DIR=D:/Kai/Dataset_Preprocessing/PTB/PTB_npy"
+@REM set "OUTPUT_DIR=D:/Kai/Dataset_Preprocessing/PTB/PTB_mfcc_only"
+
 set "SUBSET_START=0.0"
 set "SUBSET_END=1.0"
 set "ITERATION=1"
+set "DEVICE=cpu"
+set "NUM_PROCESS=10"
 set "FEATURE_MODE=mfcc_only"
 
 rem Optional parameters
@@ -27,26 +35,28 @@ rem Print header
 echo === HuBERT-ECG Feature Dumping Pipeline ===
 echo Starting execution at %date% %time%
 
-@REM rem Dump morphological features (iteration 1)
-@REM echo.
-@REM echo [EXECUTING] Dumping morphological features (iteration 1)...
-@REM python script/extract_features.py %ITERATION% %DF_PATH% %INPUT_DIR% %OUTPUT_DIR% ^
-@REM     %SUBSET_START% %SUBSET_END% ^
-@REM     --sample_rate=%SAMPLE_RATE% ^
-@REM     --feature_mode=%FEATURE_MODE% ^
-@REM     --overwrite ^
-@REM     --save_csv
-
-rem Dump latent features (iteration 2+)
+rem Dump morphological features (iteration 1)
 echo.
-echo [EXECUTING] Dumping latent features (iteration 2+)...
-set "ITERATION=2"
+echo [EXECUTING] Dumping morphological features (iteration 1)...
 python script/extract_features.py %ITERATION% %DF_PATH% %INPUT_DIR% %OUTPUT_DIR% ^
     %SUBSET_START% %SUBSET_END% ^
-    --hubert_path=%HUBERT_PATH% ^
-    --batch_size=%BATCH_SIZE% ^
-    --output_layer=%OUTPUT_LAYER% ^
+    --sample_rate=%SAMPLE_RATE% ^
+    --device=%DEVICE% ^
+    --num_process=%NUM_PROCESS% ^
+    --feature_mode=%FEATURE_MODE% ^
+    --overwrite ^
     --save_csv
+
+@REM rem Dump latent features (iteration 2+)
+@REM echo.
+@REM echo [EXECUTING] Dumping latent features (iteration 2+)...
+@REM set "ITERATION=2"
+@REM python script/extract_features.py %ITERATION% %DF_PATH% %INPUT_DIR% %OUTPUT_DIR% ^
+@REM     %SUBSET_START% %SUBSET_END% ^
+@REM     --hubert_path=%HUBERT_PATH% ^
+@REM     --batch_size=%BATCH_SIZE% ^
+@REM     --output_layer=%OUTPUT_LAYER% ^
+@REM     --save_csv
 
 @REM rem Dump time and frequency features only
 @REM echo.

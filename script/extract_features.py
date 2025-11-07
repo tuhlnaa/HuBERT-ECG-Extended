@@ -16,12 +16,12 @@ python script/extract_features.py 2 "/path/to/dataframe.csv" "/path/to/ecg/data"
 
 import logging
 import sys
-import time
 import torch
 
 import numpy as np
 import pandas as pd
 
+from torch.utils.data import Dataset
 from dataclasses import dataclass
 from pathlib import Path
 from rich.logging import RichHandler
@@ -252,21 +252,18 @@ class LatentFeatureExtractor:
     def extract_and_save(self) -> None:
         """Execute the complete feature extraction pipeline."""
         # Setup dataset and dataloader
-        dataset = self._create_dataset()
+        dataloader = self._create_dataloader()
         
         # Save metadata if requested
         if self.config.save_metadata_csv:
-            self._save_metadata_csv(dataset.ecg_dataframe)
-        
-        # Create dataloader
-        dataloader = self._create_dataloader(dataset)
+            self._save_metadata_csv(dataloader.dataset.ecg_dataframe)
         
         # Extract and save features
         self._process_batches(dataloader)
     
 
-    def _create_dataset(self) -> 'ECGDataset':
-        """Create and slice ECG dataset based on configuration."""
+    def _create_dataloader(self) -> DataLoader:
+        """Create dataloader with appropriate settings."""
         dataset = ECGDataset(
             path_to_dataset_csv=self.config.dataset_csv_path,
             ecg_dir_path=self.config.ecg_dir,
@@ -280,12 +277,7 @@ class LatentFeatureExtractor:
         start_idx = int(start_perc * len(dataset))
         end_idx = int(end_perc * len(dataset)) + 1
         dataset.ecg_dataframe = dataset.ecg_dataframe.iloc[start_idx:end_idx].copy()
-        
-        return dataset
-    
 
-    def _create_dataloader(self, dataset: 'ECGDataset') -> DataLoader:
-        """Create dataloader with appropriate settings."""
         return DataLoader(
             dataset,
             batch_size=self.config.batch_size,

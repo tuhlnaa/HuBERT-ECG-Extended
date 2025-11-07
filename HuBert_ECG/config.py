@@ -296,6 +296,10 @@ def create_dumping_parser():
     # Processing configuration
     parser.add_argument("--sample_rate", type=int, help="ECG signal sampling rate in Hz (iteration 1 only, for MFCC computation)")
     parser.add_argument("--batch_size", type=int, default=1, help="Batch size for feature extraction (iteration 2+ only)")
+    
+    # Device and threading configuration
+    parser.add_argument("--device", type=str, default='cpu', help="Device to use for computation: 'cpu', 'cuda' or 'cuda:0'...")
+    parser.add_argument("--num_process", type=int, default=8, help="Number of process to use (only applicable when device is 'cpu', ignored for 'cuda')")
    
     # Output options
     parser.add_argument("--save_csv", action="store_true", help="Save CSV manifest of dumped features for downstream clustering")
@@ -336,6 +340,9 @@ def validate_dumping_args(args):
     # Warnings for unnecessary arguments
     if args.feature_mode == "time_freq" and args.sample_rate is not None:
         logger.warning("sample_rate not necessary when dumping only time_freq features. Ignoring it")
+    
+    if args.device != "cpu" and args.num_process > 1:
+        logger.warning("num_process is ignored when device is 'cuda'. Process configuration only applies to CPU execution")
     
     # Raise all errors at once
     if errors:
