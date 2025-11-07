@@ -16,17 +16,16 @@ python script/extract_features.py 2 "/path/to/dataframe.csv" "/path/to/ecg/data"
 
 import logging
 import sys
+import time
 import torch
 
 import numpy as np
 import pandas as pd
 
-from torch.utils.data import Dataset
 from dataclasses import dataclass
 from pathlib import Path
 from rich.logging import RichHandler
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, BarColumn, TextColumn
 from typing import Dict, List, Optional, Tuple
 
@@ -123,20 +122,22 @@ class ECGFeatureExtractor:
         
         # Process data into shards
         shards = self.processor.process_to_shards(data)
+        shards = torch.from_numpy(shards).to(self.device, dtype=torch.float32)
 
-        # Extract features from each shard
-        features = [self.feature_extractor.extract(shard) for shard in shards]
+        # start_time = time.time()
+        # Extract features from ALL shards in one batch operation
+        features = self.feature_extractor.extract(shards)  # Returns (n_shards, n_features)
+        # print(time.time() - start_time)
 
         # Validate output
         expected_n_shards = (data.shape[0] * data.shape[1]) // self.config.compression_factor
         self.validate_features(features, expected_n_shards, feature_mode)
-        
-        # Save features
-        features_array = np.array(features, dtype=np.float32)
-        np.save(output_path, features_array)
-        
-        return features_array
-        
+
+        # Save features (already a numpy array)
+        np.save(output_path, features.astype(np.float32))
+
+        return features
+
 
     def extract_batch(self, dataframe: pd.DataFrame, input_dir: Path, 
                     output_dir: Path, feature_mode: str, sample_rate: int) -> Dict[str, int]:

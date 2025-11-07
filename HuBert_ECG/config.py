@@ -298,7 +298,7 @@ def create_dumping_parser():
     parser.add_argument("--batch_size", type=int, default=1, help="Batch size for feature extraction (iteration 2+ only)")
     
     # Device and threading configuration
-    parser.add_argument("--device", type=str, default='cpu', help="Device to use for computation: 'cpu', 'cuda' or 'cuda:0'...")
+    parser.add_argument("--device", type=str, default='cuda', help="Device to use for computation: 'cpu', 'cuda' or 'cuda:0'...")
     parser.add_argument("--num_process", type=int, default=8, help="Number of process to use (only applicable when device is 'cpu', ignored for 'cuda')")
    
     # Output options

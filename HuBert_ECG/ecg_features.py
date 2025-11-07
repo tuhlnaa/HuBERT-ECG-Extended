@@ -83,105 +83,166 @@ class FeatureExtractor:
 
 class TimeFreqFeatureExtractor(FeatureExtractor):
     """Extract time-domain and frequency-domain features from signals."""
-    
-    def extract(self, signal: np.ndarray) -> List[float]:
+   
+    def extract(self, signal: np.ndarray) -> np.ndarray:
         """
         Extract 16 time-domain and frequency-domain features.
         
-        Features include:
-        - Time domain (12): min, max, mean, RMS, variance, std, power, peak, 
-                            peak-to-peak, crest factor, skewness, kurtosis
-        - Frequency domain (4): max, sum, mean, variance of power spectrum
+        Args:
+            signal: Either 1D array (single signal) or 2D array (batch of signals)
+                   Shape: (signal_length,) or (n_signals, signal_length)
+       
+        Returns:
+            Features array of shape (16,) for single signal or (n_signals, 16) for batch
         """
-        # Time domain features
-        signal_min = np.min(signal)
-        signal_max = np.max(signal)
-        signal_mean = np.mean(signal)
-        signal_power = np.mean(signal ** 2)
+        signal = signal.cpu().numpy()
+
+        # Handle both single and batch inputs
+        single_input = signal.ndim == 1
+        if single_input:
+            signal = signal[np.newaxis, :]  # Add batch dimension
+        
+        # signal shape: (n_signals, signal_length)
+        axis = 1  # Compute along signal dimension
+        
+        # Time domain features (vectorized across batch)
+        signal_min = np.min(signal, axis=axis)
+        signal_max = np.max(signal, axis=axis)
+        signal_mean = np.mean(signal, axis=axis)
+        signal_power = np.mean(signal ** 2, axis=axis)
         signal_rms = np.sqrt(signal_power)
-        signal_var = np.var(signal)
-        signal_std = np.std(signal)
-        signal_peak = np.max(np.abs(signal))
-        signal_p2p = np.ptp(signal)
-        crest_factor = signal_peak / signal_rms if signal_rms > 0 else 0.0
-        skewness = stats.skew(signal)
-        kurtosis = stats.kurtosis(signal)
-        
-        # Frequency domain features
-        power_spectrum = np.abs(fft(signal)) ** 2 / len(signal)
-        spectrum_max = np.max(power_spectrum)
-        spectrum_sum = np.sum(power_spectrum)
-        spectrum_mean = np.mean(power_spectrum)
-        spectrum_var = np.var(power_spectrum)
-        
-        return [
+        signal_var = np.var(signal, axis=axis)
+        signal_std = np.std(signal, axis=axis)
+        signal_peak = np.max(np.abs(signal), axis=axis)
+        signal_p2p = np.ptp(signal, axis=axis)
+        crest_factor = np.divide(signal_peak, signal_rms, 
+                                 out=np.zeros_like(signal_peak), 
+                                 where=signal_rms > 0)
+        skewness = stats.skew(signal, axis=axis)
+        kurtosis = stats.kurtosis(signal, axis=axis)
+       
+        # Frequency domain features (vectorized)
+        power_spectrum = np.abs(fft(signal, axis=axis)) ** 2 / signal.shape[axis]
+        spectrum_max = np.max(power_spectrum, axis=axis)
+        spectrum_sum = np.sum(power_spectrum, axis=axis)
+        spectrum_mean = np.mean(power_spectrum, axis=axis)
+        spectrum_var = np.var(power_spectrum, axis=axis)
+       
+        # Stack features: shape (n_signals, 16)
+        features = np.stack([
             signal_min, signal_max, signal_mean, signal_rms, signal_var, signal_std,
             signal_power, signal_peak, signal_p2p, crest_factor, skewness, kurtosis,
             spectrum_max, spectrum_sum, spectrum_mean, spectrum_var
-        ]
+        ], axis=1)
+        
+        # Return same format as input
+        if single_input:
+            return features[0]  # Return 1D array for single input
+        return features
 
 
 class MFCCFeatureExtractor(FeatureExtractor):
     """Extract MFCC features with deltas from audio signals."""
-    
+   
     def __init__(self, sample_rate: int, device: torch.device = torch.device('cpu')):
         self.sample_rate = sample_rate
         self.device = device
-    
-
-    def compute_mfcc_with_deltas(self, waveform: torch.Tensor) -> torch.Tensor:
+   
+    def compute_mfcc_with_deltas_batch(self, waveforms: torch.Tensor) -> torch.Tensor:
         """
-        Compute MFCC features with first and second order derivatives.
-        
+        Compute MFCC features with deltas for a batch of waveforms.
+       
+        Args:
+            waveforms: (batch, time) or (batch, 1, time) tensor
+           
         Returns:
-            Concatenated MFCC features of shape (time, 39) where 39 = 13 MFCCs * 3
+            Batched MFCC features of shape (batch, time, 39)
         """
         with torch.no_grad():
-            if waveform.dim() == 1:
-                waveform = waveform.unsqueeze(0)
-            
-            waveform = waveform.to(self.device)
-            
-            # Compute MFCCs: (time, 13)
-            mfccs = torchaudio.compliance.kaldi.mfcc(
-                waveform=waveform,
-                sample_frequency=self.sample_rate,
-                use_energy=False,
-                frame_length=waveform.size(-1) / self.sample_rate * 1000,
-                frame_shift=100
-            )
-            
-            # Transpose for delta computation: (13, time)
-            mfccs_t = mfccs.transpose(0, 1)
-            deltas = torchaudio.functional.compute_deltas(mfccs_t)
-            delta_deltas = torchaudio.functional.compute_deltas(deltas)
-            
-            # Concatenate and transpose back: (time, 39)
-            features = torch.cat([mfccs_t, deltas, delta_deltas], dim=0)
-            features = features.transpose(0, 1).contiguous()
-            
-            return features
-    
+            if waveforms.dim() == 2:
+                # Add channel dimension if needed: (batch, time) -> (batch, 1, time)
+                waveforms = waveforms.unsqueeze(1)
+           
+            batch_size = waveforms.size(0)
+            all_features = []
+           
+            # Process batch through kaldi.mfcc (it handles batches internally)
+            for i in range(batch_size):
+                waveform = waveforms[i]  # (1, time)
+               
+                # Compute MFCCs: (time, 13)
+                mfccs = torchaudio.compliance.kaldi.mfcc(
+                    waveform=waveform,
+                    sample_frequency=self.sample_rate,
+                    use_energy=False,
+                    frame_length=waveform.size(-1) / self.sample_rate * 1000,
+                    frame_shift=100
+                )
+               
+                # Transpose for delta computation: (13, time)
+                mfccs_t = mfccs.transpose(0, 1)
+                deltas = torchaudio.functional.compute_deltas(mfccs_t)
+                delta_deltas = torchaudio.functional.compute_deltas(deltas)
+               
+                # Concatenate and transpose back: (time, 39)
+                features = torch.cat([mfccs_t, deltas, delta_deltas], dim=0)
+                features = features.transpose(0, 1).contiguous()
+               
+                all_features.append(features)
+           
+            # Stack into batch: (batch, time, 39)
+            return torch.stack(all_features, dim=0)
 
-    def extract(self, signal: np.ndarray) -> List[float]:
-        """Extract MFCC features and return as flattened list."""
-        waveform = torch.from_numpy(signal).float()
-        mfccs = self.compute_mfcc_with_deltas(waveform)
-        return mfccs.cpu().numpy().flatten().tolist()
+
+    def extract(self, signals: torch.Tensor) -> np.ndarray:
+        """Extract MFCC features for a batch and return as array."""
+        mfccs = self.compute_mfcc_with_deltas_batch(signals)
+        batch_size = mfccs.size(0)  # Return as (batch, features) flattened per sample
+        return mfccs.reshape(batch_size, -1).cpu().numpy()
 
 
 class MixedFeatureExtractor(FeatureExtractor):
     """Extract combined time/freq and MFCC features."""
-    
+   
     def __init__(self, sample_rate: int, device: torch.device = torch.device('cpu')):
         self.time_freq_extractor = TimeFreqFeatureExtractor()
         self.mfcc_extractor = MFCCFeatureExtractor(sample_rate, device)
-    
-    def extract(self, signal: np.ndarray) -> List[float]:
-        """Combine time/freq features with first 13 MFCCs (static coefficients only)."""
+   
+    def extract(self, signal: torch.Tensor) -> np.ndarray:
+        """
+        Combine time/freq features with first 13 MFCCs (static coefficients only).
+        
+        Args:
+            signal: Either 1D array (single signal) or 2D array (batch of signals)
+                   Shape: (signal_length,) or (n_signals, signal_length)
+        
+        Returns:
+            Features array of shape (29,) for single signal or (n_signals, 29) for batch
+            (16 time/freq features + 13 MFCC features)
+        """
+        # Handle both single and batch inputs
+        single_input = signal.ndim == 1 or (hasattr(signal, 'ndim') and signal.ndim == 1)
+        
+        # Extract time/freq features (returns (16,) or (n_signals, 16))
         time_freq_features = self.time_freq_extractor.extract(signal)
+        
+        # Extract MFCC features (returns (batch, time, 39))
         mfcc_features = self.mfcc_extractor.extract(signal)
-        return time_freq_features + mfcc_features[:13]
+
+        # Take only first 13 coefficients (static MFCCs) from last dimension
+        if mfcc_features.ndim == 3:  # (batch, time, 39)
+            mfcc_static = mfcc_features[..., :13]  # (batch, time, 13)
+        elif mfcc_features.ndim == 2:  # (time, 39) for single input
+            mfcc_static = mfcc_features[:, :13]  # (time, 13)
+        
+        if single_input:
+            # Both should be 1D: (16,) and (13,)
+            combined = np.concatenate([time_freq_features, mfcc_static])
+        else:
+            # Both should be 2D: (n_signals, 16) and (n_signals, 13)
+            combined = np.concatenate([time_freq_features, mfcc_static], axis=1)
+
+        return combined
 
 
 class FeatureExtractorFactory:

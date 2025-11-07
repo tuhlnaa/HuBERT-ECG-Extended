@@ -9,21 +9,29 @@ rem Configuration
 set "DF_PATH=./output/ptb_testV1.csv"
 set "INPUT_DIR=./output/PTB_testV1"
 set "OUTPUT_DIR=./output/PTB_testV1_outputV2"
+set "FEATURE_MODE=mfcc_only"
 
 @REM set "DF_PATH=data/label/ptbxl/ptbxl_all.csv"
 @REM set "INPUT_DIR=D:/Kai/Dataset_Preprocessing/PTB-XL/PTB-XL_npy"
 @REM set "OUTPUT_DIR=D:/Kai/Dataset_Preprocessing/PTB-XL/PTB-XL_mfcc_only"
+@REM set "FEATURE_MODE=mfcc_only"
 
 @REM set "DF_PATH=data/label/ptb/ptb_all.csv"
 @REM set "INPUT_DIR=D:/Kai/Dataset_Preprocessing/PTB/PTB_npy"
 @REM set "OUTPUT_DIR=D:/Kai/Dataset_Preprocessing/PTB/PTB_mfcc_only"
+@REM set "FEATURE_MODE=mfcc_only"
+
+@REM set "DF_PATH=data/label/ptb/ptb_all.csv"
+@REM set "INPUT_DIR=D:/Kai/Dataset_Preprocessing/PTB/PTB_npy"
+@REM set "OUTPUT_DIR=D:/Kai/Dataset_Preprocessing/PTB/PTB_time_freq"
+@REM set "FEATURE_MODE=time_freq"
 
 set "SUBSET_START=0.0"
 set "SUBSET_END=1.0"
 set "ITERATION=1"
 set "DEVICE=cpu"
 set "NUM_PROCESS=10"
-set "FEATURE_MODE=mfcc_only"
+
 
 rem Optional parameters
 set "HUBERT_PATH=output/model_weights/hubert_ecg_small.pt"
