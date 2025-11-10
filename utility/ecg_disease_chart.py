@@ -71,7 +71,7 @@ def plot_ecg_diseases(
     
     # Use default metadata columns if not provided
     if metadata_cols is None:
-        metadata_cols = ['filename', 'age', 'sex']
+        metadata_cols = ['filename', 'age', 'sex', "Patient_ID", "strat_fold"]
     
     # Get disease columns (exclude metadata columns)
     disease_cols = [col for col in df.columns if col not in metadata_cols]

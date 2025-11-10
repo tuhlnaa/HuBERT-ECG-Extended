@@ -1,0 +1,8 @@
+=== Disease Label Mapping ===
+--------------------------------------------------
+A: RBBB (Count: 63525)
+B: ST (Count: 49872)
+C: AF (Count: 41851)
+D: SB (Count: 37948)
+E: LBBB (Count: 37167)
+F: 1dAVb (Count: 35758)

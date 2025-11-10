@@ -3,7 +3,6 @@ Total unique samples: 21799
 Columns: ['filename', 'age', 'sex', 'strat_fold', 'SR', 'ISCIL', 'LOWT', 'IPLMI', 'CLBBB', 'ILBBB', 'INJAL', 'PVC', 'ALMI', 'NT_', 'NST_', 'ILMI', 'STD_', 'NDT', 'SVTAC', 'IPMI', 'LNGQT', 'LPR', '3AVB', 'WPW', 'PACE', 'PAC', 'CRBBB', 'DIG', 'ANEUR', 'NORM', 'LVOLT', 'ISC_', 'HVOLT', 'INJLA', 'PMI', 'LAO/LAE', 'INJIN', 'RVH', 'ISCAN', 'ASMI', 'VCLVH', 'EL', 'TAB_', 'AMI', 'PSVT', 'ABQRS', 'IVCD', 'LVH', 'QWAVE', 'LPFB', 'AFLT', 'IRBBB', 'RAO/RAE', 'SVARR', 'SEHYP', 'LAFB', 'SBRAD', 'AFIB', 'STACH', 'TRIGU', 'LMI', 'PRC(S)', 'INVT', 'ISCLA', 'SARRH', 'STE_', 'IMI', '1AVB', 'INJIL', 'ISCIN', 'ISCAL', '2AVB', 'INJAS', 'BIGU', 'ISCAS', 'ISCI', '_AVB', 'STTC', 'ISCA', 'LAFB/LPFB', 'HYP', 'CD', 'MI']
 
 === Tag Distribution ===
-strat_fold: 2175 (9.98%)
 SR: 16748 (76.83%)
 ISCIL: 179 (0.82%)
 LOWT: 438 (2.01%)

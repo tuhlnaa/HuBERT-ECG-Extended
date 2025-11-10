@@ -1,0 +1,11 @@
+=== Disease Label Mapping ===
+--------------------------------------------------
+A: RBBB (Count: 1857)
+B: AF (Count: 1221)
+C: NSR (Count: 918)
+D: STD (Count: 869)
+E: IAVB (Count: 722)
+F: VEB (Count: 700)
+G: PAC (Count: 616)
+H: LBBB (Count: 236)
+I: STE (Count: 220)

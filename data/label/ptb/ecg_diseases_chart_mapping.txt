@@ -1,0 +1,16 @@
+=== Disease Label Mapping ===
+--------------------------------------------------
+A: MI (Count: 367)
+B: NSR (Count: 80)
+C: VF (Count: 25)
+D: CHD (Count: 21)
+E: BBB (Count: 20)
+F: CD (Count: 15)
+G: AF (Count: 15)
+H: VH (Count: 13)
+I: VTach (Count: 10)
+J: HF (Count: 7)
+K: HVD (Count: 5)
+L: CIAHB (Count: 2)
+M: RAF (Count: 2)
+N: WPW (Count: 2)
