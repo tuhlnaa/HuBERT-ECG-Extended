@@ -16,6 +16,7 @@ python script/extract_features.py 2 "/path/to/dataframe.csv" "/path/to/ecg/data"
 
 import logging
 import sys
+import time
 import torch
 
 import numpy as np
@@ -25,10 +26,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from rich.logging import RichHandler
 from torch.utils.data import DataLoader
-
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, BarColumn, TextColumn
 from typing import Dict, List, Optional, Tuple
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import multiprocessing as mp
 
 # Import custom modules
 PROJECT_ROOT = Path(__file__).parents[1]
@@ -64,26 +65,28 @@ class ExtractionConfig:
 
 
 # Add this module-level function (needs to be at module level for pickling)
-def process_single_record_features(task: Tuple) -> Tuple[bool, str, Optional[str]]:
+def process_single_record_features(
+    task: Tuple
+) -> Tuple[bool, str, Optional[str]]:
     """
     Process a single record for feature extraction.
     
     Args:
         task: Tuple of (record_dict, input_dir, output_dir, feature_mode, 
-              sample_rate, base_sample_rate, config_dict, skip_existing, max_samples)
+              sample_rate, base_sample_rate, config_dict, skip_existing, max_samples, device_str)
     
     Returns:
         Tuple of (success, filename, error_message)
     """
     (record_dict, input_dir, output_dir, feature_mode, sample_rate, 
-     base_sample_rate, config_dict, skip_existing, max_samples, device) = task
+     base_sample_rate, config_dict, skip_existing, max_samples, device_str) = task
     
     filename = record_dict['filename']
     
     try:
         # Create local instances (each process needs its own)
-        # Use CPU for multiprocessing to avoid GPU conflicts
-        device = torch.device(device)
+        # Use the assigned device for this task
+        device = torch.device(device_str)
         
         # Reconstruct config from dict
         from types import SimpleNamespace
@@ -135,7 +138,6 @@ def process_single_record_features(task: Tuple) -> Tuple[bool, str, Optional[str
     except Exception as e:
         return (False, filename, str(e))
 
-
 class ECGFeatureExtractor:
     """Main class for extracting features from ECG records."""
     
@@ -144,15 +146,16 @@ class ECGFeatureExtractor:
         feature_mode: str,
         sample_rate: int, 
         base_sample_rate: int = 500, 
-        device = "cuda",
+        device = ["cuda:0", "cuda:1"],  # Now accepts list of device strings
         skip_existing: bool = True,
         n_processes: int = 5,
     ):
-        self.device = device
+        self.devices = device
         self.skip_existing = skip_existing
         self.n_processes = n_processes
         
         logger.info(f"Using {self.n_processes} processes for feature extraction")
+        logger.info(f"Distributing work across devices: {self.devices}")
 
         # Validate sampling rate
         if sample_rate not in Config.SAMPLING:
@@ -185,6 +188,7 @@ class ECGFeatureExtractor:
     ) -> List[Tuple]:
         """
         Prepare processing tasks from dataframe records.
+        Distributes devices evenly across tasks in round-robin fashion.
         
         Returns:
             List of task tuples for multiprocessing
@@ -194,6 +198,7 @@ class ECGFeatureExtractor:
         # Convert config to dict for pickling
         config_dict = vars(self.config)
         
+        task_index = 0
         for record in dataframe.itertuples(index=False):
             # Convert record to dict for pickling
             record_dict = record._asdict()
@@ -203,6 +208,9 @@ class ECGFeatureExtractor:
             # Skip if file exists and skip_existing is True
             if self.skip_existing and output_path.exists():
                 continue
+            
+            # Assign device in round-robin fashion
+            device_str = self.devices[task_index % len(self.devices)]
             
             task = (
                 record_dict,
@@ -214,9 +222,10 @@ class ECGFeatureExtractor:
                 config_dict,
                 self.skip_existing,
                 max_samples,
-                self.device
+                device_str  # Add device assignment
             )
             tasks.append(task)
+            task_index += 1
         
         return tasks
 
@@ -501,7 +510,8 @@ class FeatureExtractionPipeline:
     def __init__(self, args):
         """Initialize pipeline with command-line arguments."""
         self.args = args
-        self.device = torch.device(args.device)
+        self.device = args.device
+        self.num_process = args.num_process
         self.input_dir = Path(args.input_dir)
         self.output_dir = Path(args.output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -532,7 +542,8 @@ class FeatureExtractionPipeline:
             feature_mode=self.args.feature_mode,
             sample_rate=self.args.sample_rate,
             device=self.device, 
-            skip_existing=self.skip_existing
+            skip_existing=self.skip_existing,
+            n_processes=self.num_process
         )
         extractor.extract_batch(
             dataframe=dataframe,
@@ -589,8 +600,9 @@ class FeatureExtractionPipeline:
 def main():
     """Main entry point for feature extraction."""
     args = create_dumping_parser()
-    args.device = args.device[0]
+    args.device = args.device[0].split()
     init_seeds(seed=42)
+    
     pipeline = FeatureExtractionPipeline(args)
     pipeline.run()
 

@@ -158,6 +158,8 @@ class MFCCFeatureExtractor(FeatureExtractor):
         Returns:
             Batched MFCC features of shape (batch, time, 39)
         """
+        waveforms = waveforms.to(self.device)
+        
         with torch.no_grad():
             if waveforms.dim() == 2:
                 # Add channel dimension if needed: (batch, time) -> (batch, 1, time)

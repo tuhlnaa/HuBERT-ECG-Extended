@@ -16,10 +16,10 @@ set "FEATURE_MODE=mfcc_only"
 @REM set "OUTPUT_DIR=D:/Kai/Dataset_Preprocessing/PTB-XL/PTB-XL_mfcc_only"
 @REM set "FEATURE_MODE=mfcc_only"
 
-@REM set "DF_PATH=data/label/ptb/ptb_all.csv"
-@REM set "INPUT_DIR=D:/Kai/Dataset_Preprocessing/PTB/PTB_npy"
-@REM set "OUTPUT_DIR=D:/Kai/Dataset_Preprocessing/PTB/PTB_mfcc_only"
-@REM set "FEATURE_MODE=mfcc_only"
+set "DF_PATH=data/label/ptb/ptb_all.csv"
+set "INPUT_DIR=D:/Kai/Dataset_Preprocessing/PTB/PTB_npy"
+set "OUTPUT_DIR=D:/Kai/Dataset_Preprocessing/PTB/PTB_mfcc_only"
+set "FEATURE_MODE=mfcc_only"
 
 @REM set "DF_PATH=data/label/ptb/ptb_all.csv"
 @REM set "INPUT_DIR=D:/Kai/Dataset_Preprocessing/PTB/PTB_npy"
@@ -29,9 +29,8 @@ set "FEATURE_MODE=mfcc_only"
 set "SUBSET_START=0.0"
 set "SUBSET_END=1.0"
 set "ITERATION=1"
-set "DEVICE=cpu"
-set "NUM_PROCESS=10"
-
+set DEVICE="cuda:0"
+set "NUM_PROCESS=5"
 
 rem Optional parameters
 set "HUBERT_PATH=output/model_weights/hubert_ecg_small.pt"
