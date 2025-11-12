@@ -19,17 +19,18 @@ from PIL import Image
 from pathlib import Path
 
 
-def create_animation(input_dir, output_path, duration=100, loop=0, resize=1.0, pad_color='#000000'):
+def create_animation(input_dir, output_path, duration=100, loop=0, resize=1.0, pad_color='#000000', fps=30):
     """
     Create an animated file (WebP/MP4/MKV) from PNG frames
     
     Args:
         input_dir (Path): Directory containing the PNG frames
         output_path (Path): Path where the output file will be saved
-        duration (int): Duration for each frame in milliseconds
+        duration (int): Duration for each frame in milliseconds (used for WebP)
         loop (int): Number of times to loop animation (0 = infinite, only for WebP)
         resize (float): Resize ratio for input images (1.0 = original size, 0.5 = half size, 2.0 = double size)
         pad_color (str): Hex color for padding (e.g., '#000000' for black)
+        fps (int): Frames per second for video output (default 30)
     """
     # Get list of frames and sort them
     frame_files = sorted([f for f in input_dir.iterdir() if f.name.startswith('frame_') and f.suffix == '.png'])
@@ -51,7 +52,7 @@ def create_animation(input_dir, output_path, duration=100, loop=0, resize=1.0, p
     if output_format == '.webp':
         _create_webp(frame_files, output_path, duration, loop, resize, max_width, max_height, pad_color)
     elif output_format in ['.mp4', '.mkv']:
-        _create_video(frame_files, output_path, duration, resize, max_width, max_height, pad_color)
+        _create_video(frame_files, output_path, duration, resize, max_width, max_height, pad_color, fps)
     else:
         raise ValueError(f"Unsupported output format: {output_format}. Supported formats: .webp, .mp4, .mkv")
 
@@ -210,17 +211,18 @@ def _create_webp(frame_files, output_path, duration, loop, resize, max_width, ma
         print(f"Error saving WebP: {str(e)}")
 
 
-def _create_video(frame_files, output_path, duration, resize, max_width, max_height, pad_color):
+def _create_video(frame_files, output_path, duration, resize, max_width, max_height, pad_color, fps):
     """Create MP4/MKV video"""
-    if not frame_files:
-        return
-    
     # Ensure dimensions are even (required by most video codecs)
     width = max_width if max_width % 2 == 0 else max_width + 1
     height = max_height if max_height % 2 == 0 else max_height + 1
     
-    # Calculate FPS based on duration (converting from milliseconds to seconds)
-    fps = 1000 / duration
+    # Calculate how many times to repeat each frame to achieve the desired duration
+    # duration is in milliseconds, so convert to seconds
+    duration_seconds = duration / 1000.0
+    frames_to_repeat = max(1, int(round(fps * duration_seconds)))
+    
+    print(f"Video settings: {fps} fps, each image repeated {frames_to_repeat} times ({duration}ms duration)")
     
     # Initialize video writer with VP9 codec
     fourcc = cv2.VideoWriter_fourcc(*'VP90')
@@ -236,7 +238,10 @@ def _create_video(frame_files, output_path, duration, resize, max_width, max_hei
                 # Apply padding if needed
                 frame = _pad_cv2_image(frame, width, height, pad_color)
                 
-                out.write(frame)
+                # Write the frame multiple times to achieve the desired duration
+                for _ in range(frames_to_repeat):
+                    out.write(frame)
+                
                 print(f"Processed {frame_file.name}")
             else:
                 print(f"Error reading {frame_file.name}")
@@ -247,9 +252,10 @@ def _create_video(frame_files, output_path, duration, resize, max_width, max_hei
         
     print(f"Successfully created video: {output_path}")
     print(f"Final video resolution: {width}x{height}")
+    print(f"Total frames written: {len(frame_files) * frames_to_repeat}")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description='Convert PNG frames to animated WebP/MP4/MKV')
     parser.add_argument('--input_dir', required=True, help='Directory containing PNG frames')
     parser.add_argument('--output_path', required=True, help='Path for output file (.webp/.mp4/.mkv)')
@@ -257,25 +263,26 @@ def main():
     parser.add_argument('--loop', type=int, default=0, help='Number of animation loops (0 = infinite, WebP only)')
     parser.add_argument('--resize', type=float, default=1.0, help='Resize ratio for input images (1.0=original, 0.5=half, 2.0=double)')
     parser.add_argument('--pad_color', type=str, default='#000000', help='Hex color for padding (e.g., #000000 for black)')
+    parser.add_argument('--fps', type=int, default=30, help='Frames per second for video output (default: 30)')
     
     args = parser.parse_args()
-    
-    # Validate resize parameter
+
+    input_dir = Path(args.input_dir)
+    output_path = Path(args.output_path)  
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Validate parameter
     if args.resize <= 0:
         raise ValueError("Resize ratio must be greater than 0")
     
-    # Validate pad_color format
     if not args.pad_color.startswith('#') or len(args.pad_color) != 7:
         raise ValueError("pad_color must be in hex format (e.g., #000000)")
     
-    input_dir = Path(args.input_dir)
-    output_path = Path(args.output_path)
+    if args.fps <= 0:
+        raise ValueError("FPS must be greater than 0")
     
     if not input_dir.exists():
         raise ValueError(f"Input directory does not exist: {input_dir}")
-    
-    # Create output directory if it doesn't exist
-    output_path.parent.mkdir(parents=True, exist_ok=True)
     
     create_animation(
         input_dir,
@@ -283,8 +290,10 @@ def main():
         duration=args.duration,
         loop=args.loop,
         resize=args.resize,
-        pad_color=args.pad_color
+        pad_color=args.pad_color,
+        fps=args.fps
     )
+
 
 if __name__ == "__main__":
     main()
