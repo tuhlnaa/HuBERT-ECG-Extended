@@ -20,11 +20,14 @@ import joblib
 import logging
 import wandb
 import numpy as np
+import matplotlib.pyplot as plt
 
 from pathlib import Path
 from rich.logging import RichHandler
 from sklearn.cluster import MiniBatchKMeans
 from sklearn.preprocessing import Normalizer
+from sklearn.manifold import TSNE
+
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from sklearn.metrics import calinski_harabasz_score, davies_bouldin_score
@@ -84,32 +87,6 @@ def create_kmeans_model(
         max_no_improvement=100,
         reassignment_ratio=0.0
     )
-
-
-def generate_model_filename(
-    n_clusters: int,
-    train_iteration: int,
-    layer: Optional[int],
-    sse: float
-) -> str:
-    """Generate a descriptive filename for the clustering model.
-    
-    Args:
-        n_clusters: Number of clusters
-        train_iteration: Training iteration number
-        layer: Encoder layer (None for morphology-based clustering)
-        sse: Sum of squared errors
-        
-    Returns:
-        Model filename
-    """
-    if train_iteration == 1:
-        base_name = f"kmeans_{n_clusters}_morphology"
-    else:
-        base_name = f"kmeans_{n_clusters}_encoder_l{layer}_iter{train_iteration}"
-    
-    sse_str = f"{int(sse):e}"
-    return f"{base_name}_sse{sse_str}.pkl"
 
 
 def load_and_normalize_features(
@@ -175,14 +152,95 @@ def compute_clustering_metrics(
     }
 
 
+def visualize_tsne(
+    model: MiniBatchKMeans,
+    dataloader: DataLoader,
+    feature_dir: Path,
+    normalizer: Normalizer,
+    save_path: Path,
+    n_samples: int = 10000,
+    perplexity: int = 30,
+    desc: str = "Computing T-SNE"
+) -> None:
+    """Create T-SNE visualization of clustered features.
+    
+    Args:
+        model: Trained k-means model
+        dataloader: DataLoader for the dataset
+        feature_dir: Directory containing feature files
+        normalizer: Normalizer for features
+        save_path: Path to save the visualization
+        n_samples: Maximum number of samples to use for T-SNE (for performance)
+        perplexity: T-SNE perplexity parameter
+        desc: Description for progress bar
+    """
+    all_features = []
+    all_labels = []
+    total_samples = 0
+    
+    # Collect features and cluster assignments
+    for _, filenames in tqdm(dataloader, total=len(dataloader), desc=desc):
+        if total_samples >= n_samples:
+            break
+            
+        features = load_and_normalize_features(filenames, feature_dir, normalizer)
+        assignments = model.predict(features)
+        
+        # Limit samples to avoid memory issues
+        samples_to_take = min(len(features), n_samples - total_samples)
+        all_features.append(features[:samples_to_take])
+        all_labels.append(assignments[:samples_to_take])
+        total_samples += samples_to_take
+    
+    # Concatenate all collected features
+    all_features = np.concatenate(all_features, axis=0)
+    all_labels = np.concatenate(all_labels, axis=0)
+    
+    logger.info(f"Computing T-SNE for {len(all_features)} samples...")
+    
+    # Compute T-SNE
+    tsne = TSNE(
+        n_components=2,
+        perplexity=perplexity,
+        random_state=RANDOM_SEED,
+        n_jobs=-1
+    )
+    tsne_features = tsne.fit_transform(all_features)
+    
+    # Create visualization
+    plt.figure(figsize=(12, 10))
+    scatter = plt.scatter(
+        tsne_features[:, 0],
+        tsne_features[:, 1],
+        c=all_labels,
+        cmap='tab20',
+        alpha=0.6,
+        s=10
+    )
+    plt.colorbar(scatter, label='Cluster')
+    plt.title(f'T-SNE Visualization of Clusters (n={model.n_clusters})')
+    plt.xlabel('T-SNE Component 1')
+    plt.ylabel('T-SNE Component 2')
+    plt.tight_layout()
+    
+    # Save figure
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    logger.info(f"Saved T-SNE visualization to {save_path}")
+
+
 def cluster(args) -> None:
     """Perform k-means clustering on ECG features with train and validation evaluation.
     
     Args:
         args: Arguments from argument parser containing clustering configuration
     """
+    # Create directory
     save_dir = Path(f"{args.output_dir}/sklearn-model")
     save_dir.mkdir(parents=True, exist_ok=True)
+    
+    tsne_dir = Path(f"{args.output_dir}/tsne_visualizations")
+    tsne_dir.mkdir(parents=True, exist_ok=True)
 
     # group = f"clustering_iteration_{args.train_iteration}"
     # wandb.init(project="HuBert ECG", group=group, entity=None)
@@ -273,6 +331,29 @@ def cluster(args) -> None:
             desc="Val evaluation"
         )
         
+        # Generate T-SNE visualizations
+        logger.info("Generating T-SNE visualizations...")
+        
+        # Train T-SNE
+        train_tsne_path = tsne_dir / f"frame_{global_step:03d}_tsne_train_{n_clusters}_clusters.png"
+        visualize_tsne(
+            model, train_dataloader, feature_dir, normalizer,
+            save_path=train_tsne_path,
+            desc="T-SNE (train)"
+        )
+        
+        # # Validation T-SNE
+        # val_tsne_path = tsne_dir / f"tsne_val_{n_clusters}_clusters.png"
+        # visualize_tsne(
+        #     model, val_dataloader, feature_dir, normalizer,
+        #     save_path=val_tsne_path,
+        #     desc="T-SNE (val)"
+        # )
+        
+        # # Log T-SNE images to ClearML
+        # clearml_logger.log_image("train_tsne", str(train_tsne_path), n_clusters)
+        # clearml_logger.log_image("val_tsne", str(val_tsne_path), n_clusters)
+        
         # # Log metrics to W&B
         # wandb.log({
         #     "train_sse": train_metrics["sse"],
@@ -298,9 +379,11 @@ def cluster(args) -> None:
         logger.info(f"Val   - SSE: {val_metrics['sse']:.2f}, DB: {val_metrics['db_score']:.4f}, CH: {val_metrics['ch_score']:.2f}")
         
         # Save model with validation SSE in filename
-        model_filename = generate_model_filename(
-            n_clusters, args.train_iteration, args.layer, val_metrics["sse"]
-        )
+        if args.train_iteration == 1:
+            model_filename = f"kmeans_{n_clusters}_morphology.pkl"
+        else:
+            model_filename = f"kmeans_{n_clusters}_encoder_l{args.layer}_iter{args.train_iteration}.pkl"
+
         joblib.dump(model, save_dir / model_filename)
         logger.info(f"Saved model to {model_filename}")
         
@@ -308,14 +391,19 @@ def cluster(args) -> None:
 
 
 def evaluate_clustering(args) -> None:
-    """Evaluate a trained clustering model using Davies-Bouldin, Calinski-Harabasz scores, and SSE.
+    """Evaluate a trained clustering model using Davies-Bouldin, Calinski-Harabasz scores, SSE, and T-SNE visualization.
     
     Args:
         args: Arguments from argument parser containing evaluation configuration
     """
     init_seeds(seed=RANDOM_SEED)
+    feature_dir = Path(args.in_dir)
     model_path = Path(args.model_path)
     logger.info(f"Evaluating clustering model: {model_path.name}")
+    
+    # Create directory for T-SNE visualization
+    tsne_dir = Path(args.output_dir) / "tsne_visualizations"
+    tsne_dir.mkdir(parents=True, exist_ok=True)
     
     dataset = ECGDataset(
         path_to_dataset_csv=args.path_to_dataset_csv_val,
@@ -335,7 +423,6 @@ def evaluate_clustering(args) -> None:
     
     model = joblib.load(model_path)
     normalizer = Normalizer()
-    feature_dir = Path(args.in_dir)
     
     # Compute all metrics
     metrics = compute_clustering_metrics(
@@ -346,6 +433,15 @@ def evaluate_clustering(args) -> None:
     logger.info(f"Sum of Squared Errors (SSE): {metrics['sse']:.2f}")
     logger.info(f"Average Davies-Bouldin score: {metrics['db_score']:.4f} (lower is better)")
     logger.info(f"Average Calinski-Harabasz score: {metrics['ch_score']:.4f} (higher is better)")
+    
+    # Generate T-SNE visualization
+    logger.info("Generating T-SNE visualization...")
+    tsne_path = tsne_dir / f"tsne_evaluation_{model.n_clusters}_clusters.png"
+    visualize_tsne(
+        model, dataloader, feature_dir, normalizer,
+        save_path=tsne_path,
+        desc="Computing T-SNE"
+    )
 
 
 def main() -> None:

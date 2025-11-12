@@ -93,7 +93,7 @@ class ClearMLLogger:
             continue_last_task=reuse_last_task_id,
             tags=tags,
             output_uri=True,
-            auto_connect_frameworks={'pytorch': False}
+            auto_connect_frameworks={'pytorch': False, 'matplotlib': False}
         )
         self.task.set_initial_iteration(offset=0)
 
