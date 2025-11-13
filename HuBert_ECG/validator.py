@@ -71,7 +71,7 @@ def validate_pretrain_model(model, val_loader, device, logger, global_step):
             ecg, ensemble_labels = ecg.to(device), ensemble_labels.to(device)
             # attention_mask = (attention_mask).to(device) # attention mask could harm inference performance according to HF docs
 
-            # (ensamble_length, batch_size, sequence_length)
+            # (ensemble_length, batch_size, sequence_length)
             ensemble_labels = ensemble_labels.transpose(0, 1)
 
             # Forward pass (no attention mask during validation per HF recommendation)

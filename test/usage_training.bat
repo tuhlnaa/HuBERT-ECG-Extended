@@ -7,7 +7,7 @@ rem More useful information available with: python train.py --help
 
 rem Configuration - Required Parameters
 set "TRAIN_ITERATION=1"
-set "ECG_DIR_PATH=output/PTB"
+set "ECG_DIR_PATH=D:/Kai/Dataset_Preprocessing/PTB/PTB_npy"
 set "TRAIN_CSV=data/label/ptb/ptb_train_0.csv"
 set "VAL_CSV=data/label/ptb/ptb_test_0.csv"
 set "BATCH_SIZE=16"
@@ -19,14 +19,16 @@ set "ALPHA=1.0"
 @REM set "KMEANS_PATH=output/PTB_mfcc_only/kmeans_models.txt"
 @REM set "TRAIN_FEATURES_PATH=output/PTB_mfcc_only/train_features"
 @REM set "VAL_FEATURES_PATH=output/PTB_mfcc_only/val_features"
+@REM set "VOCAB_SIZES=100"
 set "KMEANS_PATH=output/models.txt"
-set "TRAIN_FEATURES_PATH=output/PTB_mfcc_only"
-set "VAL_FEATURES_PATH=output/PTB_mfcc_only"
-set "VOCAB_SIZES=100"
+set "TRAIN_FEATURES_PATH=D:/Kai/Dataset_Preprocessing/PTB/PTB_mfcc_only"
+set "VAL_FEATURES_PATH=D:/Kai/Dataset_Preprocessing/PTB/PTB_mfcc_only"
+set "VOCAB_SIZES=8"
 
 rem Training schedule
 set "TRAINING_STEPS=250"
 set "VAL_INTERVAL=1"
+set "PATIENCE=50"
 
 rem Optional parameters - Model configuration
 set "LARGENESS=small"

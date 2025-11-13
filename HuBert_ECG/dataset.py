@@ -87,12 +87,12 @@ def create_dataloader(
 
 def validate_vocab_sizes(args, dataset):
     """Validate vocabulary sizes match k-means cluster counts."""
-    assert len(args.vocab_sizes) == dataset.ensamble_length, (
+    assert len(args.vocab_sizes) == dataset.ensemble_length, (
         f"Number of vocab_sizes ({len(args.vocab_sizes)}) must match "
-        f"number of tasks ({dataset.ensamble_length})"
+        f"number of tasks ({dataset.ensemble_length})"
     )
     
-    for vocab_size, kmeans in zip(args.vocab_sizes, dataset.ensamble_kmeans):
+    for vocab_size, kmeans in zip(args.vocab_sizes, dataset.ensemble_kmeans):
         n_clusters = kmeans.cluster_centers_.shape[0]
         assert vocab_size == n_clusters, (
             f"vocab_size ({vocab_size}) must match number of k-means "
@@ -103,18 +103,18 @@ def validate_vocab_sizes(args, dataset):
 class ECGDataset(Dataset):
     def __init__(
         self,
-        path_to_dataset_csv : str,
-        ecg_dir_path : str,
-        downsampling_factor : int = None,
-        features_path : str = None,
-        kmeans_path : str = None,
-        label_start_index : int = 3,
-        pretrain : bool = True,
-        encode : bool = False,
-        beat_based_attention_mask : bool = False,
-        random_crop : bool = False,
-        return_full_length : bool = False,
-        ):
+        path_to_dataset_csv: str,
+        ecg_dir_path: str,
+        downsampling_factor: int = None,
+        features_path: str = None,
+        kmeans_path: str = None,
+        label_start_index: int = 3,
+        pretrain: bool = True,
+        encode: bool = False,
+        beat_based_attention_mask: bool = False,
+        random_crop: bool = False,
+        return_full_length: bool = False,
+    ):
         """Dataset for loading and processing ECG signals for pretraining and finetuning.
 
         Args:
@@ -158,7 +158,6 @@ class ECGDataset(Dataset):
             
             where length = 5000 if `return_full_length=True` else 2500.
         """
-        
         logger.info(f"Loading dataset from {path_to_dataset_csv}...")
 
         self.ecg_dataframe = pd.read_csv(path_to_dataset_csv, dtype={'filename': str})
@@ -170,40 +169,48 @@ class ECGDataset(Dataset):
         self.random_crop = random_crop
         self.return_full_length = return_full_length
 
+        # Initialize mode-specific attributes
         if pretrain:
-            with open(kmeans_path, 'r') as f:
-                kmeans_paths = f.readlines()
-                
-            # filter out commented lines
-            kmeans_paths = [path for path in kmeans_paths if not path.startswith("#")]
-                
-            self.ensamble_length = len(kmeans_paths)
-            self.ensamble_kmeans = [joblib.load(path.strip()) for path in kmeans_paths]
-            self.features_path = features_path
+            self._init_pretrain_mode(kmeans_path, features_path)
         elif not encode:
-            self.diagnoses_cols = self.ecg_dataframe.columns.values.tolist()[label_start_index:]
-            assert len(self.diagnoses_cols) > 0, "No labels found in the dataset"
-            self.weights = self.compute_weights()
-            
-        
-    def compute_weights(self):
-        logger.info("Computing weights...")        
-        if len(self.diagnoses_cols) > 1:
-            weights = []
-            for label in self.diagnoses_cols:
-                count = self.ecg_dataframe[label].sum()
-                weight = (self.ecg_dataframe.__len__() - count) / (count + 1e-9)
-                weights.append(weight)
-        else:
-            num_labels = self.ecg_dataframe[self.diagnoses_cols[0]].max() + 1
-            weights = num_labels / self.ecg_dataframe[self.diagnoses_cols].value_counts()
-            weights = weights.values.tolist()
-        logger.info("Done with the weights.")
-        return torch.FloatTensor(weights)
+            self._init_finetuning_mode(label_start_index)
 
-    
-    def __len__(self):
-        return len(self.ecg_dataframe)
+
+    def _init_pretrain_mode(self, kmeans_path: str, features_path: str):
+        """Initialize pretrain-specific attributes."""
+        with open(kmeans_path, 'r') as f:
+            kmeans_paths = [line for line in f if not line.startswith("#")]
+                
+        self.ensemble_length = len(kmeans_paths)
+        self.ensemble_kmeans = [joblib.load(path.strip()) for path in kmeans_paths]
+        self.features_path = features_path
+
+
+    def _init_finetuning_mode(self, label_start_index: int):
+        """Initialize finetuning-specific attributes."""
+        self.diagnoses_cols = self.ecg_dataframe.columns.values.tolist()[label_start_index:]
+        assert len(self.diagnoses_cols) > 0, "No labels found in the dataset"
+        self.is_multilabel = len(self.diagnoses_cols) > 1
+        self.weights = self._compute_weights()
+
+
+    def _compute_weights(self):
+        """Compute class weights for imbalanced datasets."""
+        logger.info("Computing weights...")
+        
+        if self.is_multilabel:
+            # Multilabel: compute weight per label
+            weights = [
+                (len(self.ecg_dataframe) - count) / (count + 1e-9)
+                for count in (self.ecg_dataframe[label].sum() for label in self.diagnoses_cols)
+            ]
+        else:
+            # Multiclass: compute weight per class
+            num_labels = self.ecg_dataframe[self.diagnoses_cols[0]].max() + 1
+            weights = (num_labels / self.ecg_dataframe[self.diagnoses_cols].value_counts()).values.tolist()
+        
+        logger.info("Done with the weights.")
+        return torch.tensor(weights, dtype=torch.float32)
 
 
     def __getitem__(self, idx):
@@ -253,8 +260,8 @@ class ECGDataset(Dataset):
             feat_path = os.path.join(self.features_path, ecg_filename)
             features = np.load(feat_path, allow_pickle=True)                
                
-            # [ensamble_length, n_tokens], where values on row i-th are in [0, V_i - 1] and V_i is the number of clusters for the i-th kmeans model
-            labels = [kmeans.predict(features).tolist() for kmeans in self.ensamble_kmeans] 
+            # [ensemble_length, n_tokens], where values on row i-th are in [0, V_i - 1] and V_i is the number of clusters for the i-th kmeans model
+            labels = [kmeans.predict(features).tolist() for kmeans in self.ensemble_kmeans] 
             
             output = (
                 torch.from_numpy(ecg_data.copy()).float(),
@@ -278,6 +285,11 @@ class ECGDataset(Dataset):
             
             return output
    
+   
+    def __len__(self):
+        return len(self.ecg_dataframe)
+    
+
     def collate(self, batch : Tuple[Any]):
         unpacked = tuple(zip(*batch))
         if self.encode and not self.pretrain:
@@ -286,7 +298,8 @@ class ECGDataset(Dataset):
             return ecg_data, ecg_filenames
         else:
             return tuple(map(torch.stack, unpacked))
-        
+    
+    
     def compute_attention_mask_for_padding(self, array):
         array = array.reshape(12, -1)     # 12 x SAMPLES_IN_5_SECONDS_AT_500HZ   
         for index in range(array.shape[1]):
@@ -302,6 +315,7 @@ class ECGDataset(Dataset):
         attention_mask = np.repeat([attention_mask], 12, axis=0)
         attention_mask = np.concatenate(attention_mask, axis=0)
         return attention_mask
+    
     
     def compute_beat_based_attention_mask(self, ecg_data):
         ''' 
