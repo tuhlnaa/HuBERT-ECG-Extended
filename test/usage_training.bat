@@ -7,28 +7,30 @@ rem More useful information available with: python train.py --help
 
 rem Configuration - Required Parameters
 set "TRAIN_ITERATION=1"
-set "ECG_DIR_PATH=D:/Kai/Dataset_Preprocessing/PTB/PTB_npy"
+set "ECG_DIR_PATH=output/PTB_npy"
 set "TRAIN_CSV=data/label/ptb/ptb_train_0.csv"
 set "VAL_CSV=data/label/ptb/ptb_test_0.csv"
-set "BATCH_SIZE=16"
+set "BATCH_SIZE=32"
 set "PATIENCE=10"
 
 rem Pretraining-specific required parameters
 set "MASK_TIME_PROB=0.065"
 set "ALPHA=1.0"
+
 @REM set "KMEANS_PATH=output/PTB_mfcc_only/kmeans_models.txt"
 @REM set "TRAIN_FEATURES_PATH=output/PTB_mfcc_only/train_features"
 @REM set "VAL_FEATURES_PATH=output/PTB_mfcc_only/val_features"
 @REM set "VOCAB_SIZES=100"
-set "KMEANS_PATH=output/models.txt"
-set "TRAIN_FEATURES_PATH=D:/Kai/Dataset_Preprocessing/PTB/PTB_mfcc_only"
-set "VAL_FEATURES_PATH=D:/Kai/Dataset_Preprocessing/PTB/PTB_mfcc_only"
-set "VOCAB_SIZES=8"
+
+set "TRAIN_FEATURES_PATH=output/PTB_mfcc_only"
+set "VAL_FEATURES_PATH=output/PTB_mfcc_only"
+set "KMEANS_PATH=output/PTB/sklearn-model/models-03.txt"
+set "VOCAB_SIZES=3"
 
 rem Training schedule
-set "TRAINING_STEPS=250"
+set "TRAINING_STEPS=1000"
 set "VAL_INTERVAL=1"
-set "PATIENCE=50"
+set "PATIENCE=500"
 
 rem Optional parameters - Model configuration
 set "LARGENESS=small"
