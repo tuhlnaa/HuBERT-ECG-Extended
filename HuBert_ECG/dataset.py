@@ -1,20 +1,21 @@
+import joblib
 import logging
+import os
+import torch
+
+import neurokit2 as nk
 import numpy as np
 import pandas as pd
-from typing import Tuple, Any
-import torch
-import os
-import joblib
-from torch.utils.data import Dataset
-import neurokit2 as nk
+
+from rich.logging import RichHandler
 from scipy import signal
 from torch.utils.data import DataLoader
-from rich.logging import RichHandler
+from torch.utils.data import Dataset
+
+from typing import Tuple, Any
 
 SAMPLES_IN_5_SECONDS_AT_500HZ = 2500
 SAMPLES_IN_10_SECONDS_AT_500HZ = 5000
-
-
 
 # Configure logging
 logging.basicConfig(
@@ -214,81 +215,129 @@ class ECGDataset(Dataset):
 
 
     def __getitem__(self, idx):
-        
         record = self.ecg_dataframe.iloc[idx]
         ecg_filename = record['filename']
 
+        # Resolve ECG file path
         ecg_path = ecg_filename if os.path.isfile(ecg_filename) else os.path.join(self.ecg_dir_path, ecg_filename)
 
-        ecg_data = np.load(ecg_path) # (12, any duration)
+        # Load and crop ECG
+        ecg_data = self._load_and_crop_ecg(ecg_path)
+        
+        # Preprocess ECG
+        ecg_data = self._preprocess_ecg(ecg_data)
+        
+        # Generate output based on mode
+        if self.encode:
+            return self._get_encode_output(ecg_data, ecg_filename)
+        
+        # Compute attention mask (needed for both pretrain and finetuning)
+        attention_mask = self._get_attention_mask(ecg_data)
+        
+        if self.pretrain:
+            return self._get_pretrain_output(ecg_data, attention_mask, ecg_filename)
+        
+        return self._get_finetuning_output(ecg_data, attention_mask, record)
+    
+    
+    def __len__(self):
+        return len(self.ecg_dataframe)
 
+
+    def _load_and_crop_ecg(self, ecg_path: str) -> np.ndarray:
+        """Load ECG data and apply appropriate cropping strategy."""
+        ecg_data = np.load(ecg_path)  # (12, any duration)
+
+        # Determine cropping strategy
         if self.pretrain or self.encode:
-            ecg_data = ecg_data[:, :SAMPLES_IN_5_SECONDS_AT_500HZ]
-        elif self.random_crop: 
-            start = np.random.randint(0, ecg_data.shape[1] - SAMPLES_IN_5_SECONDS_AT_500HZ + 1)
-            ecg_data = ecg_data[:, start:start+SAMPLES_IN_5_SECONDS_AT_500HZ]
-        elif self.return_full_length:
+            return ecg_data[:, :SAMPLES_IN_5_SECONDS_AT_500HZ]
+        
+        if self.return_full_length:
             # returns a random 10-sec crop since 10 sec is the most common length found in literature and is sufficiently long
             # NOTE: we can't load the entire length (up to 30mins) of an ECG because ECGs from different datasets may have different durations and therefore be unstackable/unbatchable
             # NOTE: HuBERT-ECG is not designed to handle 10-sec ECGs but 5-sec recordings -> the returned ECG must be cropped to 5-sec once returned
             # We use this strategy for TTA
-            start = np.random.randint(0, ecg_data.shape[1] - SAMPLES_IN_10_SECONDS_AT_500HZ + 1)
-            ecg_data = ecg_data[:, start:start+SAMPLES_IN_10_SECONDS_AT_500HZ]
-        else:
-            ecg_data = ecg_data[:, :SAMPLES_IN_5_SECONDS_AT_500HZ]
+            # Random 10-second crop for test-time augmentation
+            max_start = ecg_data.shape[1] - SAMPLES_IN_10_SECONDS_AT_500HZ
+            if max_start > 0:
+                start = np.random.randint(0, max_start + 1)
+                return ecg_data[:, start:start + SAMPLES_IN_10_SECONDS_AT_500HZ]
+            return ecg_data[:, :SAMPLES_IN_10_SECONDS_AT_500HZ]
         
-        mask = np.isnan(ecg_data)
-        ecg_data = np.where(mask, ecg_data[~mask].mean(), ecg_data)
+        if self.random_crop:
+            max_start = ecg_data.shape[1] - SAMPLES_IN_5_SECONDS_AT_500HZ
+            if max_start > 0:
+                start = np.random.randint(0, max_start + 1)
+                return ecg_data[:, start:start + SAMPLES_IN_5_SECONDS_AT_500HZ]
         
-        # flatten the leads 
-        ecg_data = ecg_data.reshape(-1) # (12*SAMPLES_IN_5_SECONDS_AT_500HZ,)
+        return ecg_data[:, :SAMPLES_IN_5_SECONDS_AT_500HZ]
+
+
+    def _preprocess_ecg(self, ecg_data: np.ndarray) -> np.ndarray:
+        """Preprocess ECG: handle NaN, flatten, and downsample."""
+        # Handle NaN values - replace with mean of non-NaN values
+        if np.isnan(ecg_data).any():
+            nan_mask = np.isnan(ecg_data)
+            mean_value = np.nanmean(ecg_data)  # Use nanmean to handle all-NaN case
+            ecg_data = np.where(nan_mask, mean_value, ecg_data)
         
-        # downsampling 
+        # Flatten leads
+        ecg_data = ecg_data.reshape(-1)
+        
+        # Downsample if needed
         if self.downsampling_factor is not None:
             ecg_data = signal.decimate(ecg_data, self.downsampling_factor)
-            
-        # compute attention mask
-        if not self.encode:
-            if self.beat_based_attention_mask:
-                attention_mask = self.compute_beat_based_attention_mask(ecg_data)
-            else:
-                attention_mask = self.compute_attention_mask_for_padding(ecg_data)
         
-            
-        if self.pretrain:
-            
-            feat_path = os.path.join(self.features_path, ecg_filename)
-            features = np.load(feat_path, allow_pickle=True)                
-               
-            # [ensemble_length, n_tokens], where values on row i-th are in [0, V_i - 1] and V_i is the number of clusters for the i-th kmeans model
-            labels = [kmeans.predict(features).tolist() for kmeans in self.ensemble_kmeans] 
-            
-            output = (
-                torch.from_numpy(ecg_data.copy()).float(),
-                torch.from_numpy(attention_mask.copy()).long(),
-                torch.Tensor(labels).long()    
-            )
+        return ecg_data
 
-            return output
-        
-        elif self.encode:
-            
-            return torch.from_numpy(ecg_data.copy()).float(), ecg_filename
-        
-        else: # finetuning
-            labels = record[self.diagnoses_cols].values.astype(float if len(self.diagnoses_cols) > 1 else int)
-            output = (
-                torch.from_numpy(ecg_data.copy()).float(),
-                torch.from_numpy(attention_mask.copy()).long(),
-                torch.from_numpy(labels.copy()).float() if len(self.diagnoses_cols) > 1 else torch.from_numpy(labels.copy()).long()
-            )
-            
-            return output
-   
-   
-    def __len__(self):
-        return len(self.ecg_dataframe)
+
+    def _get_encode_output(self, ecg_data: np.ndarray, ecg_filename: str) -> tuple:
+        """Prepare output for encode mode."""
+        return torch.from_numpy(ecg_data).float(), ecg_filename
     
+
+    def _get_attention_mask(self, ecg_data: np.ndarray) -> np.ndarray:
+        """Compute attention mask based on configuration."""
+        if self.beat_based_attention_mask:
+            return self.compute_beat_based_attention_mask(ecg_data)
+        return self.compute_attention_mask_for_padding(ecg_data)
+
+
+    def _get_pretrain_output(self, ecg_data: np.ndarray, attention_mask: np.ndarray, 
+                            ecg_filename: str) -> tuple:
+        """Prepare output for pretrain mode."""
+        feat_path = os.path.join(self.features_path, ecg_filename)
+        features = np.load(feat_path, allow_pickle=True)
+        
+        # Generate ensemble labels
+        # [ensemble_length, n_tokens], where values on row i-th are in [0, V_i - 1] and V_i is the number of clusters for the i-th kmeans model
+        labels = [kmeans.predict(features).tolist() for kmeans in self.ensemble_kmeans]
+        
+        return (
+            torch.from_numpy(ecg_data).float(),
+            torch.from_numpy(attention_mask).long(),
+            torch.tensor(labels, dtype=torch.long)
+        )
+
+
+    def _get_finetuning_output(self, ecg_data: np.ndarray, attention_mask: np.ndarray,
+                               record: pd.Series) -> tuple:
+        """Prepare output for finetuning mode."""
+        labels = record[self.diagnoses_cols].values
+        
+        if self.is_multilabel:
+            labels = labels.astype(float)
+            label_tensor = torch.from_numpy(labels).float()
+        else:
+            labels = labels.astype(int)
+            label_tensor = torch.from_numpy(labels).long()
+        
+        return (
+            torch.from_numpy(ecg_data).float(),
+            torch.from_numpy(attention_mask).long(),
+            label_tensor
+        )
+   
 
     def collate(self, batch : Tuple[Any]):
         unpacked = tuple(zip(*batch))
@@ -298,8 +347,8 @@ class ECGDataset(Dataset):
             return ecg_data, ecg_filenames
         else:
             return tuple(map(torch.stack, unpacked))
-    
-    
+        
+
     def compute_attention_mask_for_padding(self, array):
         array = array.reshape(12, -1)     # 12 x SAMPLES_IN_5_SECONDS_AT_500HZ   
         for index in range(array.shape[1]):
@@ -316,7 +365,7 @@ class ECGDataset(Dataset):
         attention_mask = np.concatenate(attention_mask, axis=0)
         return attention_mask
     
-    
+
     def compute_beat_based_attention_mask(self, ecg_data):
         ''' 
         Computes attention mask focusing only on P wave, QRS complex and T wave
@@ -325,8 +374,9 @@ class ECGDataset(Dataset):
         ecg_data = ecg_data.reshape(12, SAMPLES_IN_5_SECONDS_AT_500HZ)
         _, rpeaks = nk.ecg_peaks(ecg_data[1], sampling_rate=500) #compute R peaks from II
         signal_dwt, waves_dwt = nk.ecg_delineate(ecg_data[1], rpeaks, sampling_rate=500, method="dwt", show=False, show_type='all')
+
         signal_dwt['ECG_R_Peaks'] = 0
-        signal_dwt['ECG_R_Peaks'].iloc[rpeaks['ECG_R_Peaks']] = 1
+        signal_dwt.loc[rpeaks['ECG_R_Peaks'], 'ECG_R_Peaks'] = 1
         
         p_wave = signal_dwt['ECG_P_Onsets'] | signal_dwt['ECG_P_Offsets'] # binary serie with 1 where P waves start and stop
         qrs_complex = signal_dwt['ECG_Q_Peaks'] | signal_dwt['ECG_S_Peaks'] # binary serie with 1 where QRS complexes start and stop
