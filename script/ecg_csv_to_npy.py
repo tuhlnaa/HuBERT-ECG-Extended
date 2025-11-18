@@ -232,7 +232,7 @@ class ECGCSVConverter:
             tasks.append((csv_file_path, output_filepath, self.gain, self.baseline, self.adc_zero))
         
         return tasks
-    
+
 
     def _process_with_multiprocessing(
         self, tasks: List[Tuple], skipped_count: int, total_files_found: int
@@ -241,6 +241,8 @@ class ECGCSVConverter:
         processed_count = 0
         failed_count = 0
         failed_files = []
+        
+        CHUNK_SIZE = 4028  # Process in chunks of 4028
         
         with ProcessPoolExecutor(max_workers=self.n_processes) as executor:
             with Progress(
@@ -254,21 +256,25 @@ class ECGCSVConverter:
                 
                 task_id = progress.add_task("[green]Processing CSV files", total=len(tasks))
                 
-                futures = [
-                    executor.submit(process_single_csv_file, task) for task in tasks
-                ]
-                
-                for future in as_completed(futures):
-                    success, filename, error_msg = future.result()
+                # Process tasks in chunks
+                for i in range(0, len(tasks), CHUNK_SIZE):
+                    chunk = tasks[i:i + CHUNK_SIZE]
                     
-                    if success:
-                        processed_count += 1
-                    else:
-                        failed_count += 1
-                        failed_files.append((filename, error_msg))
-                        logger.error(error_msg)
+                    futures = [
+                        executor.submit(process_single_csv_file, task) for task in chunk
+                    ]
                     
-                    progress.update(task_id, advance=1)
+                    for future in as_completed(futures):
+                        success, filename, error_msg = future.result()
+                        
+                        if success:
+                            processed_count += 1
+                        else:
+                            failed_count += 1
+                            failed_files.append((filename, error_msg))
+                            logger.error(error_msg)
+                        
+                        progress.update(task_id, advance=1)
         
         self._log_failed_files(failed_files, failed_count)
         

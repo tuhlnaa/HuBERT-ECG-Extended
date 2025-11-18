@@ -24,8 +24,8 @@ set "ALPHA=1.0"
 
 set "TRAIN_FEATURES_PATH=output/PTB_mfcc_only"
 set "VAL_FEATURES_PATH=output/PTB_mfcc_only"
-set "KMEANS_PATH=output/PTB/sklearn-model/models-03.txt"
-set "VOCAB_SIZES=3"
+@REM set "KMEANS_PATH=output/PTB/sklearn-model/models-03.txt"
+@REM set "VOCAB_SIZES=3"
 
 rem Training schedule
 set "TRAINING_STEPS=1000"
@@ -55,6 +55,8 @@ echo Starting execution at %date% %time%
 
 set "LOAD_PATH=output/checkpoints/self-supervised/hubert_1_iteration_61.pt"
 
+echo %KMEANS_PATH%
+echo %VOCAB_SIZES%
 rem Train iteration 1 (using morphological features)
 echo.
 echo [EXECUTING] Training iteration 1 with morphological features...

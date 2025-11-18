@@ -273,7 +273,7 @@ def train(args):
                     # Early stopping
                     if patience_count >= patience:
                         logger.warning(
-                            f"EARLY STOPPING: Max patience reached at step {global_step} "
+                            f"EARLY STOPPING: Max patience reached at step {global_step} (Epoch: {epoch+1}/{epochs}) "
                             f"(patience_count={patience_count})"
                         )
                         return
