@@ -15,26 +15,31 @@ Usage:
 
 import argparse
 import csv
+import wfdb
 from pathlib import Path
 from collections import Counter
 from typing import Dict, List, Set
 
 
 def parse_hea_file(hea_path: Path) -> Set[str]:
-    """Parse a HEA file and extract diagnosis codes from the #Dx line."""
+    """Parse a HEA file and extract diagnosis codes using wfdb."""
     dx_codes = set()
     
     try:
-        with open(hea_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith('#Dx:'):
-                    # Extract codes after '#Dx:' and split by comma
-                    codes_str = line.split(':', 1)[1].strip()
-                    if codes_str:
-                        codes = [code.strip() for code in codes_str.split(',')]
-                        dx_codes.update(codes)
-                    break
+        # Read the record header (without the .hea extension)
+        record_name = str(hea_path.with_suffix(''))
+        record = wfdb.rdheader(record_name)
+        
+        # Extract diagnosis codes from comments
+        for comment in record.comments:
+            # Handle both '#Dx:' format and 'Dx:' format
+            comment_stripped = comment.lstrip('#').strip()
+            if comment_stripped.startswith('Dx:'):
+                codes_str = comment_stripped.split(':', 1)[1].strip()
+                if codes_str:
+                    codes = [code.strip() for code in codes_str.split(',')]
+                    dx_codes.update(codes)
+                break
     except Exception as e:
         print(f"Warning: Error reading {hea_path}: {e}")
     
