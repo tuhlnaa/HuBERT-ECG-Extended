@@ -1,3 +1,4 @@
+from typing import Tuple
 import pandas as pd
 import os
 import numpy as np
@@ -361,6 +362,7 @@ def simple_split(df, test_size, label_start_index = 3, random_state=None, n_spli
     else:
         return trains, tests
 
+
 def label_distribution(df, label_start=3, return_counts=False):
     labels = df.columns.values[label_start:]
     dist = df[labels].sum(axis=0)
@@ -369,26 +371,91 @@ def label_distribution(df, label_start=3, return_counts=False):
     else:
         return dist / len(df)
 
-def apply_filter(signal, filter_bandwidth, fs=500):
-    ''' Bandpass filtering to remove noise, artifacts etc '''
-    # Calculate filter order
-    order = int(0.3 * fs)
-    # Filter signal
-    signal, _, _ = filter_signal(signal=signal, ftype='FIR', band='bandpass',
-                                order=order, frequency=filter_bandwidth, 
-                                sampling_rate=fs)
-    return signal
 
-def scaling(seq, smooth=1e-8):
-    return 2 * (seq - np.min(seq, axis=1)[None].T) / (np.max(seq, axis=1) - np.min(seq, axis=1) + smooth)[None].T - 1
+def bandpass_filter(
+    signal: np.ndarray,
+    frequency_band: Tuple[float, float],
+    sampling_rate: float = 500.0,
+) -> np.ndarray:
+    """Apply FIR bandpass filter to remove noise and artifacts."""
+    order = int(0.3 * sampling_rate)
+    filtered, _, _ = filter_signal(
+        signal=signal,
+        ftype='FIR',
+        band='bandpass',
+        order=order,
+        frequency=frequency_band,
+        sampling_rate=sampling_rate,
+    )
+    return filtered
 
-def ecg_preprocessing(ecg_signal, original_frequency, target_frequency=100, band_pass=[0.05, 47]):
 
-    assert ecg_signal.shape[0] == 12, "ecg_signal should have (12, signal_length) shape for pre-processing"
+def normalize_to_range(
+    signal: np.ndarray,
+    target_range: Tuple[float, float] = (-1.0, 1.0),
+    epsilon: float = 1e-8,
+) -> np.ndarray:
+    """Normalize signal to target range along axis 1.
+    
+    Args:
+        signal: Input array of shape (n_channels, n_samples).
+        target_range: Output (min, max) range.
+        epsilon: Small constant to avoid division by zero.
+    
+    Returns:
+        Normalized signal.
+    """
+    min_val = signal.min(axis=1, keepdims=True)
+    max_val = signal.max(axis=1, keepdims=True)
+    
+    # Scale to [0, 1]
+    normalized = (signal - min_val) / (max_val - min_val + epsilon)
+    
+    # Scale to target range
+    low, high = target_range
+    return normalized * (high - low) + low
 
-    ecg_signal = resample(ecg_signal, int(ecg_signal.shape[-1] * (500/original_frequency)), axis=1) 
-    # 500 hz is the highest and most common sampling rate found in literature and respects Shannon theorem, as max spectral component is said to be 150 hz
 
-    ecg_signal = apply_filter(ecg_signal, band_pass) # this band focuses on dominant component of ecg waves
-
-    return scaling(ecg_signal)
+def preprocess_ecg(
+    ecg_signal: np.ndarray,
+    original_sampling_rate: float,
+    target_sampling_rate: float = 500.0,
+    bandpass_frequencies: Tuple[float, float] = (0.05, 47.0),
+    target_frequency: int = 100
+) -> np.ndarray:
+    """Preprocess 12-lead ECG signal.
+    
+    Performs resampling, bandpass filtering, and normalization.
+    
+    Args:
+        ecg_signal: ECG data of shape (12, signal_length).
+        original_sampling_rate: Original sampling rate in Hz.
+        target_sampling_rate: Target sampling rate in Hz (default 500 Hz 
+            per Shannon theorem for ~150 Hz max ECG component).
+        bandpass_frequencies: Filter cutoff frequencies in Hz.
+    
+    Returns:
+        Preprocessed signal normalized to [-1, 1].
+    
+    Raises:
+        ValueError: If input doesn't have 12 leads.
+    """
+    if ecg_signal.shape[0] != 12:
+        raise ValueError(
+            f"Expected 12-lead ECG with shape (12, n_samples), "
+            f"got shape {ecg_signal.shape}"
+        )
+    
+    # Resample to target frequency
+    # 500 Hz is the highest and most common sampling rate found in literature and respects Shannon theorem, as max spectral component is said to be 150 Hz
+    n_samples_new = int(ecg_signal.shape[1] * (target_sampling_rate / original_sampling_rate))
+    resampled = resample(ecg_signal, n_samples_new, axis=1)
+    
+    # Apply bandpass filter (dominant component of ecg waves)
+    filtered = bandpass_filter(
+        resampled, 
+        bandpass_frequencies, 
+        sampling_rate=target_sampling_rate,
+    )
+    
+    return normalize_to_range(filtered)

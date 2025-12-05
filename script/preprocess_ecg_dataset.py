@@ -14,20 +14,21 @@ import logging
 import sys
 import wfdb
 
-import numpy as np
 import multiprocessing as mp
+import numpy as np
 
 from pathlib import Path
-from typing import Dict, Union, Tuple, List
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from rich.logging import RichHandler
+
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, BarColumn, TextColumn
+from typing import Dict, Union, Tuple, List
 
 # Import custom modules
 PROJECT_ROOT = Path(__file__).parents[1]
 sys.path.append(str(PROJECT_ROOT))
 
-from HuBert_ECG.utils import ecg_preprocessing
+from HuBert_ECG.utils import preprocess_ecg
 
 # Configure logging
 logging.basicConfig(
@@ -66,7 +67,7 @@ def process_single_ecg_file(args: Tuple[Path, Path]) -> Tuple[bool, str, str]:
         
         # Apply preprocessing
         sampling_rate = metadata['fs']
-        processed_signal = ecg_preprocessing(signal, sampling_rate)
+        processed_signal = preprocess_ecg(signal, sampling_rate)
         processed_signal = processed_signal.astype(np.float32)
 
         # Save processed signal, e.g. shape=(38400, 12), float64
