@@ -5,6 +5,27 @@ This module provides functionality for processing ECG datasets by recursively
 searching for .hea files in a directory structure and flattening the output
 to a single output folder. Now supports multiprocessing for faster processing.
 
+Processing Workflow
+-------------------
+1. File Discovery
+   - Recursively search for WFDB format files (.hea) in the input directory
+   - Skip files that already exist in the output directory (unless --overwrite is set)
+
+2. Signal Loading
+   - Read ECG signal and metadata using wfdb.rdsamp()
+   - Transpose signal to channel-first format (12, n_samples)
+   - Replace any NaN values with zeros
+
+3. Preprocessing Pipeline (via preprocess_ecg)
+   a. Resampling: Resample signal to 500 Hz target sampling rate
+   b. Bandpass Filtering: Apply FIR bandpass filter (0.05-47.0 Hz) to remove
+      noise and artifacts outside the dominant ECG frequency range
+   c. Normalization: Normalize each channel to [-1, 1] range
+
+4. Output
+   - Save processed signal as .npy file (float32)
+   - Output filename format: {original_stem}.hea.npy
+
 Uusage:
 python ./script/preprocess_ecg_dataset.py --root-path "/path/to/ecg/data" --output-path "/path/to/output" --n-processes 10
 """
