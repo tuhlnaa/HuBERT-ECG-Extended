@@ -37,8 +37,8 @@ conda create -n hubert-ecg python=3.11
 conda activate hubert-ecg
 
 # Clone repository
-git clone https://github.com/Setsu-Kuhaku/HuBERT-ECG-CGMH.git
-cd HuBERT-ECG-CGMH
+git clone https://github.com/tuhlnaa/HuBERT-ECG-Extended.git
+cd HuBERT-ECG-Extended
 ```
 
 **Linux/Mac:**

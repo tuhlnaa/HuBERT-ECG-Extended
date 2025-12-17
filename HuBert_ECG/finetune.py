@@ -354,6 +354,9 @@ def finetune(args):
 
         pretrained_hubert = HuBERT(config)
 
+        # Transfer learning: Loading a pretrained model but with a different final layer
+        pretrained_hubert.load_state_dict(checkpoint['model_state_dict'], strict=False) # load backbone weights
+
         # restore original p-dropout or set multipliers
         for name, module in pretrained_hubert.named_modules():
             if 'dropout' in name:
@@ -361,9 +364,6 @@ def finetune(args):
         
         hubert = HuBERTClassification(pretrained_hubert, num_labels=args.vocab_size, classifier_hidden_size=args.classifier_hidden_size,  use_label_embedding=args.use_label_embedding)
         hubert.to(device)         
-
-        # Transfer learning: Loading a pretrained model but with a different final layer
-        hubert.hubert_ecg.load_state_dict(checkpoint['model_state_dict'], strict=False) # load backbone weights
 
         global_step = 0
         best_val_loss = float('inf')

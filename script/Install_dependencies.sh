@@ -1,8 +1,6 @@
 #!/bin/bash
 
 # [Linux]
-# chmod +x ./script/Install_dependencies.sh
-
 echo "Update conda itself"
 conda update -n base -c defaults conda -y
 
